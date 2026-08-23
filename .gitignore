@@ -32,6 +32,7 @@ features/
 
 # NGOẠI LỆ: split đã khóa, PHẢI commit để tái lập được kết quả
 !processed/splits.json
+!processed/splits_full.json
 !processed/crops.json
 
 # --- MODEL ĐÃ TRAIN ---

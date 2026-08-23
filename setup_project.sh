@@ -104,7 +104,7 @@ nb() {
     "drive.mount('/content/drive')\n",
     "\n",
     "!pip -q install pyarrow mahotas lightgbm optuna shap imagehash\n",
-    "!git clone -q https://github.com/NHOM/pklot-project.git /content/code || (cd /content/code && git pull -q)\n",
+    "!git clone -q https://github.com/AIVIETNAM-AIO-thanhnhan/car-parkinglot-count.git /content/code || (cd /content/code && git pull -q)\n",
     "\n",
     "import sys; sys.path.insert(0, '/content/code/src')\n",
     "import config, pklot_data, windows, features, evaluate_pklot\n",
