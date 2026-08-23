@@ -10,10 +10,12 @@ XML+JPG thô PKLot (12.416 ảnh, 3 bãi)
    ↓  dọn lỗi nhãn, cắt vùng, lấy mẫu thời gian, chia bãi
    ↓  sinh cửa sổ trượt, gán nhãn, trích feature
    ↓
-8 file parquet (1.167.241 window, 395 feature/window) → sẵn sàng huấn luyện model
+8 file parquet (1.180.200 window, 395 feature/window) → sẵn sàng huấn luyện model
 ```
 
 ## 2. Dữ liệu thô — đặc điểm và vấn đề phát hiện
+
+Folder: https://drive.google.com/drive/u/0/folders/10pibZjDFxcx2igz37u2aRzZtFOFmLvoF
 
 **Nguồn:** PKLot — 3 bãi (UFPR04, UFPR05, PUCPR), ảnh 1280×720, camera cố định, chụp 5 phút/lần
 suốt nhiều tháng. Nhãn: 1 file XML/ảnh, mỗi ô đỗ có toạ độ contour + trạng thái `occupied`.
