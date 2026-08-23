@@ -1,0 +1,92 @@
+# =====================================================================
+# PKLot Parking Detection — .gitignore
+#
+# NGUYÊN TẮC: Code vào Git. Dữ liệu vào Google Drive.
+# Không bao giờ commit ảnh, feature, hay model — repo sẽ phình lên GB.
+#
+# LƯU Ý CÚ PHÁP: .gitignore KHÔNG hỗ trợ comment cuối dòng.
+# Dấu # chỉ có tác dụng khi ở đầu dòng. Mọi ngoại lệ (!) phải
+# đứng một mình trên dòng riêng, không kèm chú thích phía sau.
+# =====================================================================
+
+# --- DỮ LIỆU THÔ (2GB, tải từ UFPR) ---
+PKLot/
+PKLot.tar.gz
+data/
+raw/
+*.jpg
+*.jpeg
+*.png
+
+# NGOẠI LỆ: hình cho báo cáo thì giữ lại
+!report/figures/*.png
+
+# --- DỮ LIỆU ĐÃ XỬ LÝ ---
+# Dùng processed/* thay vì processed/ để còn lấy lại được splits.json.
+# Git không cho lấy lại file nếu cả thư mục cha đã bị loại trừ.
+processed/*
+features/
+*.parquet
+*.feather
+*.h5
+
+# NGOẠI LỆ: split đã khóa, PHẢI commit để tái lập được kết quả
+!processed/splits.json
+!processed/crops.json
+
+# --- MODEL ĐÃ TRAIN ---
+models/
+*.pkl
+*.joblib
+optuna_study.db
+
+# --- KẾT QUẢ ---
+predictions/
+*.csv
+
+# NGOẠI LỆ: bảng theo dõi của P1 — nhỏ, và cần lịch sử git khi viết báo cáo
+!results.csv
+
+# --- NOTEBOOK ---
+# Notebook trong notebooks/ VẪN commit, nhưng nhớ
+# Kernel > Restart & Clear Output trước khi commit để tránh conflict.
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+*-checkpoint.ipynb
+
+# --- PYTHON ---
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# --- MÔI TRƯỜNG ẢO ---
+venv/
+env/
+.venv/
+.env
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- HỆ ĐIỀU HÀNH ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- KHÓA / BÍ MẬT ---
+kaggle.json
+*.key
+credentials*.json
+
+# --- TẠM ---
+tmp/
+temp/
+scratch/
+*.log
