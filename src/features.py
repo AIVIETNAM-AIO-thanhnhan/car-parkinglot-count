@@ -1,60 +1,84 @@
-"""features.py — Trích 395 feature: HOG, LBP, color, texture
-Chủ sở hữu: P3
+"""features.py — Trích 395 đặc trưng cho mỗi cửa sổ.  Owner: P3 (Pipeline Engineer).
+
+395 = hog_(324) + color_(54) + lbp_(10) + tex_(7)
+
+    hog_*   : Histogram of Oriented Gradients  -> cạnh / hình dạng (shape/edges)
+    color_* : histogram màu HSV                -> màu (color)          << tín hiệu chính
+    lbp_*   : Local Binary Pattern (uniform)   -> kết cấu vi mô (micro-texture)
+    tex_*   : thống kê GLCM                     -> kết cấu (texture)
+
+Ô CÓ XE và ô TRỐNG cùng hình chữ nhật -> khác nhau ở MÀU và KẾT CẤU, không phải hình dạng.
 """
-import cv2
 import numpy as np
-from skimage.color import rgb2gray
-from skimage.feature import graycomatrix, graycoprops, hog, local_binary_pattern
+import cv2
+from skimage.feature import hog, local_binary_pattern, graycomatrix, graycoprops
 
-import config
+FEAT_SIZE = 64          # mọi cửa sổ resize về 64x64 trước khi trích (giữ số chiều ổn định)
+LBP_P, LBP_R = 8, 1     # -> P+2 = 10 bins
+COLOR_BINS = 18         # 3 kênh HSV x 18 = 54
+GLCM_LEVELS = 32
 
-# Cấu hình khớp đúng số chiều theo README § Quy ước (tiền tố bắt buộc).
-_HOG_KW = dict(orientations=9, pixels_per_cell=(16, 16), cells_per_block=(1, 1), feature_vector=True)
-# window/16 = 6 -> 6x6 cell * 9 orientation = 324
-_LBP_P, _LBP_R = 8, 1  # uniform LBP, P+2 = 10 bin
-_COLOR_BINS = 18        # 3 kênh HSV * 18 bin = 54
-_GLCM_PROPS = ("contrast", "dissimilarity", "homogeneity", "energy", "correlation", "ASM")  # 6 + entropy = 7
-_GLCM_LEVELS = 32       # 256 mức quá chậm (graycomatrix ~256x256); 32 mức đủ cho texture, nhanh ~8x
+# ---- tên cột cố định (P4 dùng cho SHAP, P3 dùng cho ablation) ----
+TEX_NAMES = ["tex_contrast", "tex_dissimilarity", "tex_homogeneity",
+             "tex_asm", "tex_energy", "tex_correlation", "tex_entropy"]
+FEATURE_NAMES = (
+    [f"hog_{i}"   for i in range(324)] +
+    [f"color_{i}" for i in range(54)]  +
+    [f"lbp_{i}"   for i in range(10)]  +
+    TEX_NAMES
+)
+assert len(FEATURE_NAMES) == 395
 
 
 def _hog(gray):
-    return hog(gray, **_HOG_KW)
-
-
-def _lbp(gray):
-    codes = local_binary_pattern(gray, P=_LBP_P, R=_LBP_R, method="uniform")
-    hist, _ = np.histogram(codes, bins=np.arange(0, _LBP_P + 3), density=True)
-    return hist  # 10 chiều
+    return hog(gray, orientations=9, pixels_per_cell=(16, 16),
+               cells_per_block=(2, 2), block_norm="L2-Hys", channel_axis=None)  # -> 324
 
 
 def _color(rgb):
-    # cv2 nhanh hơn skimage.rgb2hsv ~80x (dùng vì opencv-python-headless đã là dependency bắt buộc)
-    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)  # H:[0,180) S,V:[0,256) — uint8
-    ranges = ((0, 180), (0, 256), (0, 256))
-    hist = [np.histogram(hsv[..., c], bins=_COLOR_BINS, range=ranges[c], density=True)[0] for c in range(3)]
-    return np.concatenate(hist)  # 54 chiều
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    ranges = [(0, 180), (0, 256), (0, 256)]                 # H, S, V ranges in OpenCV
+    feats = []
+    for ch, (lo, hi) in enumerate(ranges):
+        h, _ = np.histogram(hsv[:, :, ch], bins=COLOR_BINS, range=(lo, hi))
+        feats.append(h / (h.sum() + 1e-9))
+    return np.concatenate(feats)                            # -> 54
 
 
-def _texture(gray_u8):
-    quantized = (gray_u8.astype(np.uint16) * _GLCM_LEVELS // 256).astype(np.uint8)
-    glcm = graycomatrix(quantized, distances=[1], angles=[0], levels=_GLCM_LEVELS, symmetric=True, normed=True)
-    props = [graycoprops(glcm, p)[0, 0] for p in _GLCM_PROPS]
+def _lbp(gray):
+    lbp = local_binary_pattern(gray, P=LBP_P, R=LBP_R, method="uniform")
+    n_bins = LBP_P + 2
+    h, _ = np.histogram(lbp, bins=n_bins, range=(0, n_bins))
+    return h / (h.sum() + 1e-9)                              # -> 10
+
+
+def _tex(gray):
+    q = (gray.astype(np.uint16) * GLCM_LEVELS // 256).astype(np.uint8)   # quantize -> 32 levels
+    glcm = graycomatrix(q, distances=[1], angles=[0], levels=GLCM_LEVELS,
+                        symmetric=True, normed=True)
+    props = [graycoprops(glcm, p)[0, 0] for p in
+             ("contrast", "dissimilarity", "homogeneity", "ASM", "energy", "correlation")]
     p = glcm[:, :, 0, 0]
-    entropy = -np.sum(p[p > 0] * np.log2(p[p > 0]))
-    return np.array(props + [entropy])  # 7 chiều
+    entropy = -np.sum(p * np.log2(p + 1e-12))
+    return np.array(props + [entropy])                      # -> 7
 
 
-FEATURE_GROUPS = (("hog", 324), ("lbp", 10), ("color", 54), ("tex", 7))
+def extract_features(win_rgb):
+    """win_rgb: HxWx3 uint8 (RGB).  Return np.float32 array of length 395."""
+    win = cv2.resize(win_rgb, (FEAT_SIZE, FEAT_SIZE), interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(win, cv2.COLOR_RGB2GRAY)
+    vec = np.concatenate([_hog(gray), _color(win), _lbp(gray), _tex(gray)])
+    return vec.astype(np.float32)
 
 
-def feature_names():
-    return [f"{prefix}_{i}" for prefix, n in FEATURE_GROUPS for i in range(n)]
-
-
-def extract(crop_rgb):
-    """crop_rgb: ảnh RGB đã resize về (WINDOW_SIZE, WINDOW_SIZE). Trả về vector 395 chiều."""
-    gray_f = rgb2gray(crop_rgb)  # float64 [0,1], dùng cho HOG
-    gray_u8 = (gray_f * 255).astype(np.uint8)  # dùng cho LBP/GLCM (cần nguyên/rời rạc)
-    vec = np.concatenate([_hog(gray_f), _lbp(gray_u8), _color(crop_rgb), _texture(gray_u8)])
-    assert vec.shape[0] == sum(n for _, n in FEATURE_GROUPS), vec.shape
-    return vec
+if __name__ == "__main__":
+    # ô "trống" giả (xám, mịn) vs ô "có xe" giả (nhiều màu, gồ ghề)
+    rng = np.random.default_rng(0)
+    empty = np.full((60, 60, 3), 120, dtype=np.uint8) + rng.integers(-8, 8, (60, 60, 3), dtype=np.int16).astype(np.uint8)
+    car   = rng.integers(0, 255, (60, 60, 3), dtype=np.uint8)
+    fe, fc = extract_features(empty), extract_features(car)
+    print("số đặc trưng / n features :", len(fe), "| tên khớp:", len(FEATURE_NAMES) == len(fe))
+    ci = [i for i, n in enumerate(FEATURE_NAMES) if n.startswith("color_")]
+    print("color std  — ô trống:", round(float(fe[ci].std()), 4), " ô có xe:", round(float(fc[ci].std()), 4))
+    print("tex_contrast — ô trống:", round(float(fe[FEATURE_NAMES.index('tex_contrast')]), 2),
+          " ô có xe:", round(float(fc[FEATURE_NAMES.index('tex_contrast')]), 2))
