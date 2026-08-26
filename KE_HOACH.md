@@ -64,12 +64,21 @@ Không nhìn ảnh. Chỉ nhớ vị trí các ô từ tập train rồi lặp l
 
 Camera PKLot **cố định**, vị trí ô luôn giống nhau, xe đỗ lại hàng giờ. Nên baseline này rất mạnh nếu chia dữ liệu sai:
 
-| Cách chia | mAP của Baseline A |
-|---|---|
-| Random split cùng bãi (SAI) | **0.76** |
-| Chia theo bãi đỗ (ĐÚNG) | **0.00** |
+| Cách chia | mAP của Baseline A | Đo thật (23/08) |
+|---|---|---|
+| Random split cùng bãi (SAI) | **0.76** | — |
+| **val = UFPR04, khác NGÀY với train** (cùng bãi) | cao — dự kiến | **0.5176** |
+| **test = PUCPR, chia theo bãi** (ĐÚNG) | **0.00** | **0.0000** ✅ |
 
 > Chạy `baselines.py` ở **Ngày 2**. Nếu điểm cao → split đang sai, phải chia lại theo bãi.
+>
+> 🔴 **Đã chạy Ngày 1. Kết quả cần hiểu đúng:**
+> - **test (PUCPR) = 0.00** → split chính **hợp lệ**, không leak vị trí. Đây là điều kiện đã PASS.
+> - **val (UFPR04) = 0.5176** → val **cố ý** cùng bãi với train (chỉ khác ngày, xem
+>   `config.VAL_LOTS`) để có tập tinh chỉnh nhanh. Hệ quả: **một model chỉ học vị trí cũng đã
+>   được ~0.52 trên val.** Vì vậy **0.5176 là SÀN của val**, không phải 0. Mọi điểm val phải
+>   vượt rõ rệt con số này mới tính là model học được gì thật.
+> - Ngưỡng "✅ Tốt mAP > 0.50" ở §5 chỉ có nghĩa khi đo trên **test**, không phải val.
 
 ### Baseline B — "Decision Tree"
 
@@ -79,9 +88,11 @@ Model đơn giản nhất. Mọi model sau phải hơn nó.
 
 ## 5. BẢNG KẾT QUẢ — thứ duy nhất cần điền
 
-| Model | mAP | Sai số số chỗ trống | Kết luận |
+Tất cả các dòng đo trên **val** (UFPR04, khác ngày). Test chỉ mở đúng 1 lần ở Ngày 12.
+
+| Model | mAP (val) | Sai số số chỗ trống | Kết luận |
 |---|---|---|---|
-| Baseline A (đoán vị trí) | | | Phải THẤP |
+| **Baseline A (đoán vị trí) — SÀN** | **0.5176** | **7.17** | 🔴 Mọi model phải vượt |
 | Baseline B (Decision Tree) | | | Điểm xuất phát |
 | Random Forest | | | Phải hơn B |
 | RF + hard negative mining | | | Phải hơn RF |
@@ -89,13 +100,18 @@ Model đơn giản nhất. Mọi model sau phải hơn nó.
 
 **Đọc bảng:** nếu điểm tăng dần từ trên xuống → dự án thành công.
 
+> ⚠️ Baseline A **không** phải dòng "phải THẤP" như dự kiến ban đầu — trên val nó là **sàn 0.5176**
+> (vì val cùng bãi với train, xem §4). Dòng "phải THẤP" là **test = 0.00**, đã kiểm và PASS.
+> Nguồn số: `results.csv`, dòng cuối cùng (`SỬA LỚN: … camera UFPR04 xê dịch 2 lần`) — **không**
+> dùng các số cũ 0.1529 / 0.2122 ở những dòng phía trên, chúng sai do lỗi xê dịch camera đã sửa.
+
 ### Tiêu chí thành công
 
-| Mức | Ngưỡng |
-|---|---|
-| ❌ Thất bại | Không vượt Baseline A |
-| ⚠️ Tối thiểu | mAP > 0.35 |
-| ✅ Tốt | mAP > 0.50, sai số chỗ trống < 3 ô |
+| Mức | Ngưỡng (val) | Ngưỡng (test — Ngày 12) |
+|---|---|---|
+| ❌ Thất bại | Không vượt sàn Baseline A **0.5176** | — |
+| ⚠️ Tối thiểu | mAP > 0.60 (≈ sàn + 0.08) | mAP > 0.35 |
+| ✅ Tốt | mAP > 0.70, sai số chỗ trống < 3 ô | mAP > 0.50, sai số chỗ trống < 3 ô |
 
 ---
 
@@ -168,6 +184,9 @@ Mỗi người viết phần mình sở hữu, P1 ghép. Ngày 16 chỉ luyện 
 
 1. **Harness viết xong và PASS trước khi ai train** (Ngày 2)
 2. **Chia split theo bãi đỗ, khóa vĩnh viễn** — không bao giờ chia ngẫu nhiên
+   *(ngoại lệ có chủ ý: **val** = UFPR04 cùng bãi với train nhưng tách theo NGÀY, để tinh chỉnh
+   nhanh. Đổi lại val có sàn Baseline A = 0.5176 — xem §4. **test = PUCPR** vẫn khác bãi hoàn toàn,
+   đây mới là phép đo thật.)*
 3. **Test set chỉ mở Ngày 12, một lần**
 4. **CODE FREEZE Ngày 11**
 
@@ -216,7 +235,7 @@ Mỗi người viết phần mình sở hữu, P1 ghép. Ngày 16 chỉ luyện 
 
 | Hằng số | Giá trị |
 |---|---|
-| `N_IMAGES` | 150 (90 train / 30 val / 30 test) |
+| `N_IMAGES` | **`None`** — đã bỏ cap 150, dùng TOÀN BỘ ảnh sau `temporal_subsample()`: **340 train / 29 val / 210 test** (579 ảnh) |
 | `WINDOW_SIZE` | **96** — p50 kích thước ô (97, 64.5)px, đo trên UFPR04+UFPR05 (`pklot_data.slot_size_report()`) |
 | `SCALES` | **`[0.5, 0.75, 1.0, 1.5, 2.0]`** — p90/p10 area = 3.3–3.45x (> 2.0) → multi-scale (`pklot_data.perspective_report()`) |
 | `STRIDE` | 16 |
