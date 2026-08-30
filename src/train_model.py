@@ -6,6 +6,7 @@ import glob
 import joblib
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
 #hàm gom data
 def load_data(file_patten):
     files = glob.glob(file_patten)
@@ -85,9 +86,13 @@ if __name__ == '__main__':
     data = load_data(file)
     X_train, Y_train, X_val, Y_val, X_test, Y_test = preprocess_data(data)
     #selec model
-    model = train_model
+    model = train_model #####
     train_acc = model.score(X_train, Y_train)
     test_acc = model.score(X_test, Y_test)
     joblib.dump(model, 'name.pkl')
     print("Train:", train_acc)
     print("Test :", test_acc)
+    Y_test_pred = model.predict(X_test)
+    print("TEST")
+    print(classification_report(Y_test, Y_test_pred))
+    print(confusion_matrix(Y_test, Y_test_pred))
