@@ -129,7 +129,13 @@ def annotated_region(lot, n_samples=10):
     Sửa bằng cách lấy hợp (union) bbox từ NHIỀU ảnh đại diện trải đều theo thời gian, đủ phủ mọi
     kỳ camera có thể có — không ảnh hưởng UFPR05/PUCPR vì các ảnh của chúng có cùng 1 layout."""
     files = sorted(glob.glob(str(LOT_ROOT / lot / "*" / "*" / "*.xml")))
-    idxs = sorted(set(round(i * (len(files) - 1) / (n_samples - 1)) for i in range(n_samples)))
+    if not files:
+        raise FileNotFoundError(
+            f"Không có file nhãn (.xml) nào cho bãi {lot!r} ở {LOT_ROOT / lot}.\n"
+            "Bãi này cần TOÀN BỘ ảnh gốc, không chỉ vài ảnh mẫu — vùng cắt lấy hợp bbox từ nhiều "
+            "ảnh trải đều theo thời gian để phủ mọi kỳ camera.\n"
+            "Chạy: bash scripts/download_data.sh raw")
+    idxs = sorted(set(round(i * (len(files) - 1) / max(1, n_samples - 1)) for i in range(n_samples)))
     x_min = y_min = float("inf")
     x_max = y_max = float("-inf")
     for i in idxs:
@@ -406,3 +412,53 @@ def build_gt_rows(split):
                     "rot_w": mx1 - mx0, "rot_h": my1 - my0, "rot_angle": 0.0,
                 })
     return rows
+
+
+def main():
+    """CLI chuẩn bị dữ liệu: raw/PKLot -> processed/{splits,crops}.json + gt.csv.
+
+    Trước 04/09 bước này KHÔNG có entry point nào — chỉ tồn tại dưới dạng đoạn code rời trong
+    notebooks/p4_models.ipynb, nên không ai chạy lại được cả quy trình từ đầu.
+    """
+    import argparse
+
+    import pandas as pd
+
+    ap = argparse.ArgumentParser(description="Chuẩn bị dữ liệu PKLot (P2, Ngày 1-2)")
+    ap.add_argument("--overwrite-split", action="store_true",
+                    help="Chia lại split. MẶC ĐỊNH TỪ CHỐI — quy tắc #2: split khóa vĩnh viễn. "
+                         "Chia lại làm mọi feature và model đã có trở nên lỗi thời.")
+    ap.add_argument("--skip-gt", action="store_true", help="chỉ làm split + crops")
+    a = ap.parse_args()
+
+    if not LOT_ROOT.exists():
+        raise SystemExit(f"Không có ảnh gốc ở {LOT_ROOT}.\n"
+                         "Chạy: bash scripts/download_data.sh raw    (~2GB)")
+
+    split_path = config.PROC / "splits.json"
+    if split_path.exists() and not a.overwrite_split:
+        split = load_split()
+        print(f"[1/3] splits.json đã có (KHÓA) — dùng lại: "
+              + " ".join(f"{k}={len(v)}" for k, v in split.items()))
+    else:
+        split = build_split()
+        save_split(split, overwrite=a.overwrite_split)
+        print(f"[1/3] đã chia split: " + " ".join(f"{k}={len(v)}" for k, v in split.items()))
+
+    print(f"[2/3] crops.json -> {save_crops()}")
+    for lot, box in json.loads((config.PROC / 'crops.json').read_text()).items():
+        print(f"        {lot}: {box}")
+
+    if a.skip_gt:
+        return
+    rows = build_gt_rows(split)
+    df = pd.DataFrame(rows)
+    out = config.PROC / "gt.csv"
+    df.to_csv(out, index=False)
+    print(f"[3/3] gt.csv -> {out}  ({len(df):,} dòng)")
+    print("        nhãn:", df.label.value_counts().to_dict(), " (0=ô trống, 1=có xe, -1=không rõ)")
+    print("        ảnh :", df.groupby('split').image_id.nunique().to_dict())
+
+
+if __name__ == "__main__":
+    main()
