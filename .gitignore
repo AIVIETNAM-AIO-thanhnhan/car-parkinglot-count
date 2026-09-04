@@ -92,6 +92,9 @@ kaggle.json
 *.key
 credentials*.json
 
+# --- TÀI LIỆU NỘI BỘ (không commit) ---
+DEVELOPMENT.md
+
 # --- TẠM ---
 tmp/
 temp/
