@@ -7,6 +7,7 @@ Chạy:  streamlit run app/streamlit_app.py
 Toàn bộ phần tính toán nằm ở src/infer.py — file này chỉ lo giao diện. Nhờ vậy con số hiện trên
 màn hình đi qua đúng công thức mà evaluate_pklot.evaluate() dùng để chấm điểm dự án.
 """
+import inspect
 import os
 import sys
 import time
@@ -20,10 +21,35 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 import config          # noqa: E402
+import detect          # noqa: E402
 import infer           # noqa: E402
 import windows         # noqa: E402
 
 st.set_page_config(page_title="Đếm chỗ đỗ xe", page_icon="🅿️", layout="wide")
+
+# Streamlit chạy lại script mỗi lần tương tác nhưng KHÔNG nạp lại module đã nằm trong
+# sys.modules. Sửa src/*.py trong lúc app đang chạy thì bản cũ vẫn còn trong bộ nhớ, và lỗi hiện
+# ra là "TypeError: unexpected keyword argument ..." — chẳng gợi ý gì về nguyên nhân thật.
+# Kiểm tra trước vài tham số mà app cần, để báo đúng việc phải làm.
+_REQUIRED = [
+    ("infer.draw_boxes", infer.draw_boxes, ("annotate", "font_size")),
+    ("infer.detect_image", infer.detect_image, ("correct_prior", "bg_veto")),
+    ("infer.crop_image", getattr(infer, "crop_image", None), ()),
+    ("detect.build_predictions", detect.build_predictions, ("bg_veto",)),
+]
+_stale = []
+for _name, _fn, _params in _REQUIRED:
+    if _fn is None:
+        _stale.append(_name)
+        continue
+    _have = inspect.signature(_fn).parameters
+    _stale += [f"{_name}({p}=…)" for p in _params if p not in _have]
+if _stale:
+    st.error(
+        "**Code trong bộ nhớ là bản cũ.** Streamlit không nạp lại module đã import khi bạn sửa "
+        "`src/*.py`.\n\nDừng tiến trình (**Ctrl+C** ở terminal) rồi chạy lại "
+        "`streamlit run app/streamlit_app.py`.\n\nThiếu: " + ", ".join(f"`{s}`" for s in _stale))
+    st.stop()
 
 MODE_SLOTS = "Nhánh B — phân loại từng ô (chính xác hơn)"
 MODE_DETECT = "Detector — trượt cửa sổ (ảnh nào cũng chạy)"
@@ -120,6 +146,56 @@ else:
 st.title("Đếm chỗ đỗ xe")
 st.caption("Ảnh bãi đỗ → số xe, số chỗ trống, tỉ lệ lấp đầy")
 
+# ----------------------------------------------------------------------
+# Bảng so sánh model — đọc từ results.csv
+# ----------------------------------------------------------------------
+FLOOR = 0.5176      # Baseline A trên val: model chỉ ghi nhớ vị trí ô, không nhìn ảnh
+
+# Chọn theo MỐC chứ không đổ nguyên results.csv: file đó còn các dòng thử nghiệm và các dòng
+# cùng model nhưng khác tham số, đưa hết lên UI sẽ gây hiểu nhầm là mâu thuẫn.
+MILESTONES = [
+    ("Baseline A — chỉ nhớ vị trí ô, không nhìn ảnh", "[CHUẨN] Baseline A"),
+    ("Baseline B — Decision Tree", "Baseline B (Decision Tree) [nms=0.20"),
+    ("Random Forest", "Random Forest [nms=0.20, phủ quyết nền BẬT]"),
+    ("Random Forest + ô cắt vuông góc", "Random Forest [cắt axis"),
+]
+
+
+@st.cache_data(show_spinner=False)
+def load_results(mtime):
+    return pd.read_csv(ROOT / "results.csv")
+
+
+with st.expander("📊 So sánh các model (đo trên tập val)", expanded=False):
+    try:
+        res = load_results((ROOT / "results.csv").stat().st_mtime)
+        res = res[res.split == "val"]
+        rows = []
+        for label, prefix in MILESTONES:
+            m = res[res.experiment.str.startswith(prefix, na=False)]
+            if m.empty:
+                continue
+            r = m.iloc[-1]      # lần chạy gần nhất của mốc đó
+            rows.append({
+                "Model": label,
+                "mAP": round(r.mAP_macro, 4),
+                "Sai số chỗ trống (ô)": r.free_slots_MAE,
+                "Sai số lấp đầy (điểm %)": r.occupancy_MAE_pp,
+                "So với sàn": "— SÀN" if prefix.startswith("[CHUẨN]") else
+                              (f"✅ +{r.mAP_macro - FLOOR:.3f}" if r.mAP_macro > FLOOR
+                               else f"❌ {r.mAP_macro - FLOOR:.3f}"),
+            })
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption(
+            f"**mAP** đo chất lượng khoanh vùng + phân loại; **sàn {FLOOR}** là điểm của một chương "
+            "trình chỉ ghi nhớ vị trí ô từ tập train rồi lặp lại — không nhìn một pixel nào của ảnh "
+            "kiểm định. Model phải vượt rõ con số đó mới coi là học được gì thật.\n\n"
+            "Hai dòng cuối cùng là một model, chỉ khác cách cắt ô lúc huấn luyện: theo góc xoay lấy "
+            "từ nhãn, so với cắt vuông góc y như lúc chạy thật.")
+    except Exception as e:
+        st.caption(f"Không đọc được results.csv: {e}")
+
 col_img, col_layout = st.columns(2)
 with col_img:
     up = st.file_uploader("Ảnh bãi đỗ", type=["jpg", "jpeg", "png"])
@@ -130,11 +206,20 @@ auto_crop = None      # hộp cắt phải áp lên ảnh trước khi chạy (c
 if mode == MODE_SLOTS:
     with col_layout:
         src = st.radio("Vị trí các ô lấy từ đâu?",
-                       ["File XML PKLot", "Bãi PKLot có sẵn", "Dán toạ độ JSON"],
+                       ["File XML PKLot", "Bãi PKLot có sẵn", "Dán toạ độ JSON",
+                        "🔍 Tự dò từ nhiều ảnh"],
                        horizontal=False)
+        # Tên ảnh đang tải lên — dùng để tự khớp layout. Layout của bãi này đặt lên ảnh của bãi
+        # khác là lỗi dễ mắc nhất và KHÔNG bao giờ báo lỗi: vẫn ra đủ box, chỉ nằm sai chỗ hết.
+        up_stem = Path(up.name).stem if up is not None else None
+
         if src == "File XML PKLot":
             xml = st.file_uploader("File .xml đi kèm ảnh", type=["xml"])
             if xml is not None:
+                if up_stem and Path(xml.name).stem != up_stem:
+                    st.error(
+                        f"**XML không khớp ảnh.** Ảnh là `{up_stem}` nhưng XML là "
+                        f"`{Path(xml.name).stem}` — các ô sẽ nằm sai vị trí. Dùng đúng cặp .jpg/.xml.")
                 tmp = Path(st.session_state.setdefault("_tmpdir", "."))
                 p = tmp / "_uploaded.xml"
                 p.write_bytes(xml.getvalue())
@@ -147,7 +232,17 @@ if mode == MODE_SLOTS:
             try:
                 gt = pd.read_csv(config.PROC / "gt.csv")
                 ids = sorted(gt.image_id.unique())
-                image_id = st.selectbox("Ảnh trong gt.csv", ids)
+                # Tự chọn đúng ảnh nếu tên file khớp, thay vì để mặc định là ảnh đầu danh sách
+                idx = ids.index(up_stem) if up_stem in ids else 0
+                image_id = st.selectbox("Ảnh trong gt.csv", ids, index=idx)
+                if up_stem and up_stem != image_id:
+                    st.error(
+                        f"**Layout không khớp ảnh.** Ảnh tải lên là `{up_stem}` nhưng đang lấy vị "
+                        f"trí ô của `{image_id}`."
+                        + (" Ảnh này không có trong `gt.csv` — hãy dùng chế độ XML hoặc JSON."
+                           if up_stem not in ids else " Chọn đúng `%s` trong ô trên." % up_stem)
+                        + "\n\nDùng sai cặp thì vẫn ra đủ box nhưng chúng nằm lên cây, lối đi và "
+                          "mặt đường — vì đó là vị trí ô của một bãi khác.")
                 slots = infer.slot_boxes_from_gt(image_id)
                 lot = gt.loc[gt.image_id == image_id, "lot"].iloc[0]
                 auto_crop = infer.crop_for_lot(lot)
@@ -156,7 +251,7 @@ if mode == MODE_SLOTS:
                                f"theo `crops.json[{lot}]` = {list(auto_crop)}.")
             except Exception as e:
                 st.error(f"Không đọc được gt.csv: {e}")
-        else:
+        elif src == "Dán toạ độ JSON":
             txt = st.text_area("JSON: `[[x_min,y_min,x_max,y_max], …]`", height=120,
                                placeholder='[[100,50,190,140], [200,50,290,140]]')
             if txt.strip():
@@ -165,6 +260,46 @@ if mode == MODE_SLOTS:
                     layout_note = f"{len(slots)} ô từ JSON dán tay"
                 except Exception as e:
                     st.error(f"JSON không hợp lệ: {e}")
+
+        else:   # tự dò
+            if bundle.get("crop_mode") != "axis":
+                st.error(
+                    "**Model này không tự dò được.** Nó được train từ ô cắt *xoay thẳng* theo nhãn, "
+                    "nên khi quét khung vuông góc nó gọi gần như mọi thứ là 'nền'.\n\n"
+                    "Cần model train từ ô cắt vuông góc:\n"
+                    "```\npython build_dataset.py --axis-aligned --out-dir ../features_axis\n"
+                    "python train_model.py --model rf --feat-dir ../features_axis \\\n"
+                    "       --save ../models/rf_axis.joblib\n```")
+            else:
+                st.caption("Camera bãi đỗ cố định còn xe thì đổi chỗ — gom nhiều ảnh khác thời "
+                           "điểm sẽ thấy được cả những ô bị che ở ảnh này nhưng lộ ra ở ảnh khác.")
+                many = st.file_uploader("Ảnh cùng camera (5–20 ảnh, khác thời điểm)",
+                                        type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+                frac = st.slider("Phải xuất hiện ở ít nhất … số ảnh", 0.1, 1.0, 0.4, 0.1)
+                if many and st.button(f"🔍 Dò layout từ {len(many)} ảnh", use_container_width=True):
+                    bar = st.progress(0.0, text="Đang dò…")
+                    try:
+                        st.session_state["auto_slots"] = infer.auto_layout(
+                            [read_image(f.getvalue()) for f in many], bundle,
+                            min_frames=max(1, round(frac * len(many))),
+                            progress=lambda k, n: bar.progress(k / n, text=f"Ảnh {k}/{n}"))
+                    except Exception as e:
+                        st.error(f"Dò thất bại: {type(e).__name__}: {e}")
+                    bar.empty()
+                if st.session_state.get("auto_slots"):
+                    slots = st.session_state["auto_slots"]
+                    nf = [s["n_frames"] for s in slots]
+                    layout_note = (f"{len(slots)} ô tự dò được — mỗi ô được xác nhận bởi "
+                                   f"{min(nf)}–{max(nf)} ảnh. Nên kiểm lại bằng mắt rồi tải XML "
+                                   f"về dùng cho các lần sau.")
+
+# Tải layout ra XML — layout dò được / dán tay mới dùng lại được ở lần sau
+if slots:
+    with col_layout:
+        st.download_button(
+            "⬇️ Tải layout (.xml)", infer.slots_to_xml(slots).encode("utf-8"),
+            file_name="layout.xml", mime="application/xml", use_container_width=True,
+            help="Đúng định dạng PKLot — lần sau chọn 'File XML PKLot' và nạp lại file này.")
 
 if up is None:
     st.info("Tải lên một ảnh bãi đỗ để bắt đầu.")
@@ -247,8 +382,20 @@ if mode == MODE_DETECT:
             f"**{fmt_int(counts['total'])} box là quá nhiều** cho một bãi đỗ thật. Thử nâng ngưỡng "
             "điểm, bật 'Bù lệch prior nền', hoặc dùng Nhánh B.")
 
-st.image(infer.draw_boxes(image, pred), use_container_width=True,
-         caption="🟩 ô trống  🟥 có xe")
+LABEL_CHOICES = {
+    "Không": None,
+    "Toạ độ (x, y)": "coords",
+    "Toạ độ đầy đủ (x1,y1,x2,y2)": "box",
+    "Kích thước (rộng × cao)": "size",
+    "Độ tin cậy": "score",
+    "Số thứ tự": "index",
+}
+c_ann, c_size = st.columns([3, 1])
+ann = c_ann.selectbox("Ghi gì lên mỗi khung?", list(LABEL_CHOICES), index=0)
+font_size = c_size.number_input("Cỡ chữ", 8, 28, 12, 1)
+
+st.image(infer.draw_boxes(image, pred, annotate=LABEL_CHOICES[ann], font_size=int(font_size)),
+         use_container_width=True, caption="🟩 ô trống  🟥 có xe")
 
 with st.expander(f"Chi tiết {fmt_int(len(pred))} box"):
     show = pred.copy()

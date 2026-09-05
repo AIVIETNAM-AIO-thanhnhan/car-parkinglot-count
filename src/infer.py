@@ -291,11 +291,22 @@ def plan_windows(img_w, img_h, window_size=None, stride=None, scales=None):
 
 def detect_image(image_rgb, bundle, scales=None, stride=None, window_size=None,
                  score_thr=None, nms_iou=None, n_jobs=None,
-                 correct_prior=True, bg_veto=True, image_id="input", progress=None):
+                 correct_prior=False, bg_veto=True, image_id="input", progress=None):
     """Trượt cửa sổ trên cả ảnh -> box cuối cùng. Ảnh nào cũng chạy được, không cần layout.
 
     Dùng windows.slide_windows (RỘNG trước) — đúng bản đã sinh ra parquet lúc train.
     progress: callable(done, total) để UI vẽ thanh tiến độ.
+
+    ⚠️ correct_prior MẶC ĐỊNH TẮT dù về lý thuyết nó đúng (xem correct_negative_sampling).
+    Đo thật trên 3 ảnh mỗi bãi, cùng model rf_axis:
+
+                        bật    tắt      (số box, ô thật)
+        UFPR04 (28 ô)    22     69
+        PUCPR (100 ô)     2     77
+
+    Lỗi chủ đạo của việc trượt cửa sổ là BỎ SÓT, không phải báo thừa. Bù prior đẩy thêm xác
+    suất về phía "nền" nên làm nặng thêm đúng cái lỗi đang có — trên PUCPR nó bóp từ 77 box
+    xuống còn 2. Chỉ bật lại nếu đo được là ảnh đang bị báo thừa.
     """
     clf = bundle["clf"]
     h, w = image_rgb.shape[:2]
@@ -364,23 +375,180 @@ def count_from_predictions(pred):
 # ======================================================================
 # Vẽ
 # ======================================================================
-def draw_boxes(image_rgb, pred, width=2, show_score=False):
-    """Vẽ box lên ảnh: xanh = ô trống, đỏ = có xe. Trả PIL.Image."""
+ANNOTATIONS = {
+    "coords": lambda i, r: f"{int(r.x_min)},{int(r.y_min)}",
+    "box": lambda i, r: f"{int(r.x_min)},{int(r.y_min)},{int(r.x_max)},{int(r.y_max)}",
+    "size": lambda i, r: f"{int(r.x_max - r.x_min)}x{int(r.y_max - r.y_min)}",
+    "score": lambda i, r: f"{r.score:.2f}",
+    "label": lambda i, r: LABEL_TEXT.get(r.label, "?"),
+    "index": lambda i, r: str(i),
+}
+
+
+def _font(size):
+    """Font bitmap mặc định của PIL rất nhỏ (~11px) và không đọc được trên ảnh 1200px.
+    Ưu tiên font vector có sẵn của Pillow; nếu bản Pillow quá cũ thì đành dùng bitmap."""
+    from PIL import ImageFont
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size)
+    except OSError:
+        pass
+    try:
+        return ImageFont.load_default(size=size)     # Pillow >= 10.1
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def draw_boxes(image_rgb, pred, width=2, annotate=None, font_size=11):
+    """Vẽ box lên ảnh: xanh = ô trống, đỏ = có xe. Trả PIL.Image.
+
+    annotate: None (chỉ vẽ khung) | tên trong ANNOTATIONS | hàm (thứ_tự, dòng) -> chuỗi
+        "coords" x,y góc trên trái · "box" cả 4 số · "size" rộng x cao
+        "score" độ tin cậy · "label" tên lớp · "index" số thứ tự
+
+    Chữ được vẽ trên nền đặc cùng màu khung, chữ trắng — nếu vẽ chữ màu trực tiếp lên ảnh thì
+    trên nền nhựa đường sáng gần như không đọc được.
+    """
     img = Image.fromarray(np.asarray(image_rgb)).convert("RGB")
     d = ImageDraw.Draw(img)
-    for r in pred.itertuples():
-        if r.label not in BOX_COLOR:
-            continue
-        box = (r.x_min, r.y_min, r.x_max, r.y_max)
-        d.rectangle(box, outline=BOX_COLOR[r.label], width=width)
-        if show_score:
-            d.text((r.x_min + 2, r.y_min + 2), f"{r.score:.2f}", fill=BOX_COLOR[r.label])
+
+    fmt = None
+    if annotate:
+        fmt = annotate if callable(annotate) else ANNOTATIONS.get(annotate)
+        if fmt is None:
+            raise ValueError(f"annotate={annotate!r} không hợp lệ. Chọn: {sorted(ANNOTATIONS)}")
+    font = _font(font_size) if fmt else None
+
+    # Hai lượt: vẽ HẾT khung rồi mới vẽ chữ. Một lượt thì khung của ô sau đè lên chữ của ô
+    # trước — ở bãi đỗ các ô kề sát nhau nên gần như nhãn nào cũng bị cắt mất một phần.
+    rows = [(i, r) for i, r in enumerate(pred.itertuples()) if r.label in BOX_COLOR]
+    for _, r in rows:
+        d.rectangle((r.x_min, r.y_min, r.x_max, r.y_max), outline=BOX_COLOR[r.label], width=width)
+    if not fmt:
+        return img
+
+    for i, r in rows:
+        text = fmt(i, r)
+        x0, y0, x1, y1 = d.textbbox((0, 0), text, font=font)
+        tw, th = x1 - x0, y1 - y0
+        # đặt nhãn NGAY TRÊN khung; nếu chạm mép trên ảnh thì lật xuống nằm trong khung
+        tx = min(r.x_min, img.width - tw - 3)
+        ty = r.y_min - th - 3
+        if ty < 0:
+            ty = r.y_min + 1
+        d.rectangle((tx, ty, tx + tw + 3, ty + th + 3), fill=BOX_COLOR[r.label])
+        d.text((tx + 2 - x0, ty + 1 - y0), text, fill=(255, 255, 255), font=font)
     return img
 
 
 def load_image(path_or_file):
     """Đọc ảnh -> mảng RGB uint8 (PIL, không phải cv2 — tránh bẫy BGR)."""
     return np.array(Image.open(path_or_file).convert("RGB"))
+
+
+# ======================================================================
+# Tự sinh layout ô đỗ (không cần khai báo tay)
+# ======================================================================
+def auto_layout(images, bundle, min_frames=None, nms_iou=None, correct_prior=True,
+                progress=None, **kw):
+    """Nhiều ảnh của CÙNG một camera -> danh sách ô đỗ, không cần ai khai báo gì.
+
+    Vì sao phải nhiều ảnh: dò trên một ảnh đơn lẻ bỏ sót nhiều ô — xe che khuất vạch, bóng đổ,
+    ô bị cây phủ. Nhưng camera bãi đỗ cố định còn xe thì đổi chỗ liên tục, nên một ô bị bỏ sót ở
+    ảnh này sẽ lộ ra ở ảnh khác. Gom dự đoán của N ảnh rồi chỉ giữ vị trí xuất hiện LẶP LẠI ở
+    >= min_frames ảnh: vừa vá được chỗ bỏ sót, vừa loại được báo nhầm ngẫu nhiên (báo nhầm hiếm
+    khi rơi đúng một chỗ ở nhiều ảnh khác nhau).
+
+    images     : list ảnh RGB (hoặc đường dẫn) của cùng một camera, cùng kích thước
+    min_frames : số ảnh tối thiểu phải cùng thấy 1 vị trí. Mặc định 40% số ảnh.
+    Trả list ô dạng dict như slot_boxes_from_*(), kèm 'n_frames' để biết độ tin cậy.
+
+    ⚠️ Chỉ chạy được với model train từ ô cắt VUÔNG GÓC
+    (`build_dataset.py --axis-aligned`). Model cắt xoay thẳng gọi 100% cửa sổ là nền.
+
+    ⚠️ correct_prior MẶC ĐỊNH BẬT ở đây, NGƯỢC với detect_image (mặc định tắt). Không mâu
+    thuẫn — hai bài toán khác nhau:
+      · dò MỘT ảnh: lỗi chủ đạo là bỏ sót, bù prior làm nặng thêm -> tắt.
+      · dò layout qua NHIỀU ảnh: camera cố định nên báo nhầm trên nền tĩnh (bụi cây, vệt
+        nhựa đường) LẶP LẠI y hệt ở mọi khung hình, bộ lọc min_frames không loại được chúng.
+        Phải chặn ngay từ đầu bằng bù prior.
+    Đo trên 20 ảnh UFPR04 (28 ô thật): bật -> 28 ô đúng số; tắt -> 91 ô, thừa gấp 3.
+    """
+    nms_iou = config.NMS_IOU if nms_iou is None else nms_iou
+    imgs = [load_image(i) if isinstance(i, (str, Path)) else np.asarray(i) for i in images]
+    if not imgs:
+        raise ValueError("Cần ít nhất 1 ảnh.")
+    shapes = {im.shape[:2] for im in imgs}
+    if len(shapes) > 1:
+        raise ValueError(f"Các ảnh phải cùng kích thước (cùng 1 camera), nhận được {shapes}.")
+    if min_frames is None:
+        min_frames = max(1, round(0.4 * len(imgs)))
+
+    parts = []
+    for k, im in enumerate(imgs):
+        if progress:
+            progress(k, len(imgs))
+        p = detect_image(im, bundle, image_id=str(k), correct_prior=correct_prior, **kw)
+        parts.append(dedup_across_classes(p, nms_iou))
+    if progress:
+        progress(len(imgs), len(imgs))
+    allp = pd.concat(parts, ignore_index=True)
+    if allp.empty:
+        return []
+
+    # Gom vị trí trùng nhau qua các ảnh: NMS trên toàn bộ box (bỏ qua image_id) chọn ra các "ổ",
+    # rồi đếm xem mỗi ổ được bao nhiêu ảnh khác nhau xác nhận.
+    boxes = allp[["x_min", "y_min", "x_max", "y_max"]].to_numpy(dtype=np.float64)
+    order = detect.nms(boxes, allp["score"].to_numpy(dtype=np.float64), nms_iou)
+    slots = []
+    for rank, i in enumerate(order):
+        iou = _iou_one_to_many(boxes[i], boxes)
+        member = iou >= nms_iou
+        n_frames = allp.loc[member, "image_id"].nunique()
+        if n_frames < min_frames:
+            continue
+        b = boxes[member].mean(axis=0)          # lấy trung bình cho vị trí ổn định hơn 1 ảnh
+        slots.append(_slot(*b.round().astype(int), slot_id=len(slots) + 1) |
+                     {"n_frames": int(n_frames)})
+    return slots
+
+
+def _iou_one_to_many(box, boxes):
+    x1 = np.maximum(box[0], boxes[:, 0]); y1 = np.maximum(box[1], boxes[:, 1])
+    x2 = np.minimum(box[2], boxes[:, 2]); y2 = np.minimum(box[3], boxes[:, 3])
+    inter = np.clip(x2 - x1, 0, None) * np.clip(y2 - y1, 0, None)
+    a = (box[2] - box[0]) * (box[3] - box[1])
+    b = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    return inter / (a + b - inter + 1e-9)
+
+
+def slots_to_xml(slots, lot_id="lot"):
+    """Xuất layout ra XML đúng định dạng PKLot — dùng lại được với slot_boxes_from_xml().
+
+    Ô không có rot_* thì ghi rotatedRect vuông góc (angle=0) và contour là 4 đỉnh hình chữ nhật.
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.Element("parking", id=str(lot_id))
+    for i, s in enumerate(slots, 1):
+        sp = ET.SubElement(root, "space", id=str(s.get("slot_id", i)))
+        if "occupied" in s:
+            sp.set("occupied", str(int(s["occupied"])))
+        cx = s.get("rot_cx", (s["x_min"] + s["x_max"]) / 2)
+        cy = s.get("rot_cy", (s["y_min"] + s["y_max"]) / 2)
+        w = s.get("rot_w", s["x_max"] - s["x_min"])
+        h = s.get("rot_h", s["y_max"] - s["y_min"])
+        ang = s.get("rot_angle", 0.0)
+        rr = ET.SubElement(sp, "rotatedRect")
+        ET.SubElement(rr, "center", x=str(round(cx)), y=str(round(cy)))
+        ET.SubElement(rr, "size", w=str(round(w)), h=str(round(h)))
+        ET.SubElement(rr, "angle", d=str(round(ang)))
+        pts = cv2.boxPoints(((cx, cy), (w, h), ang)).round().astype(int)
+        ct = ET.SubElement(sp, "contour")
+        for x, y in pts:
+            ET.SubElement(ct, "Point", x=str(int(x)), y=str(int(y)))
+    ET.indent(root, space="  ")
+    return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
 
 # ======================================================================
@@ -443,9 +611,60 @@ def self_test():
     assert (sp.label == OCCUPIED).all(), "model giả luôn nói 'có xe'"
     assert (sp.score > 0.5).all(), "điểm phải được chuẩn hoá trong 2 lớp"
 
-    # (f) vẽ được và không làm hỏng ảnh gốc
+    # (f) vẽ được, không làm hỏng ảnh gốc, và mọi kiểu nhãn đều chạy
     im = draw_boxes(img, sp)
     assert im.size == (300, 200), im.size
+    before = img.copy()
+    for kind in ANNOTATIONS:
+        assert draw_boxes(img, sp, annotate=kind).size == (300, 200), kind
+    assert draw_boxes(img, sp, annotate=lambda i, r: f"#{i}").size == (300, 200)
+    assert np.array_equal(img, before), "draw_boxes vẽ đè lên mảng ảnh gốc"
+    try:
+        draw_boxes(img, sp, annotate="khong_ton_tai")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("annotate sai phải báo lỗi, không được im lặng vẽ khung trơn")
+    # nhãn của ô sát mép trên phải được lật xuống trong khung, không bị cắt mất
+    edge = pd.DataFrame({"image_id": ["i"], "x_min": [0], "y_min": [0], "x_max": [96],
+                         "y_max": [96], "label": [EMPTY], "score": [0.9]})
+    assert draw_boxes(img, edge, annotate="coords").size == (300, 200)
+
+    # (g) xuất XML rồi đọc lại phải ra đúng các ô ban đầu (khứ hồi)
+    xml = slots_to_xml(slots, "test")
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False, encoding="utf-8") as f:
+        f.write(xml)
+    back = slot_boxes_from_xml(f.name)
+    Path(f.name).unlink()
+    assert len(back) == len(slots), f"khứ hồi XML mất ô: {len(slots)} -> {len(back)}"
+    for a, b in zip(slots, back):
+        # rotatedRect phải khứ hồi CHÍNH XÁC — đó là thứ quyết định cách cắt ô lúc suy luận.
+        # Ô không khai báo rot_* thì XML suy ra từ hộp vuông góc (tâm, kích thước, góc 0).
+        want = {k: a[k] for k in ROT_KEYS} if all(k in a for k in ROT_KEYS) else {
+            "rot_cx": (a["x_min"] + a["x_max"]) / 2, "rot_cy": (a["y_min"] + a["y_max"]) / 2,
+            "rot_w": a["x_max"] - a["x_min"], "rot_h": a["y_max"] - a["y_min"], "rot_angle": 0.0}
+        for k in ROT_KEYS:
+            assert abs(want[k] - b[k]) <= 1, (k, want, b)
+        # hộp vuông góc chỉ khứ hồi đúng khi ô KHÔNG xoay; ô xoay thì hộp bao được tính lại từ
+        # contour (rộng hơn hộp gốc) — đó là hành vi đúng, không phải mất mát
+        if abs(b["rot_angle"]) < 1e-6:
+            assert (a["x_min"], a["y_min"], a["x_max"], a["y_max"]) == \
+                   (b["x_min"], b["y_min"], b["x_max"], b["y_max"]), (a, b)
+        else:
+            assert b["x_max"] - b["x_min"] >= a["x_max"] - a["x_min"] - 1, (a, b)
+
+    # (h) auto_layout: 3 ảnh giống hệt nhau, model giả luôn nói "có xe" -> phải ra >= 1 ô,
+    #     và min_frames cao hơn số ảnh thì không ô nào qua được
+    lay = auto_layout([img] * 3, bundle, n_jobs=1)
+    assert lay and all(s["n_frames"] == 3 for s in lay), lay[:2]
+    assert auto_layout([img] * 3, bundle, min_frames=4, n_jobs=1) == []
+    try:
+        auto_layout([img, img[:100]], bundle, n_jobs=1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("ảnh khác kích thước phải bị từ chối")
 
     print("infer.self_test PASS: đếm khớp evaluate_pklot, gộp chéo lớp giảm trùng, "
           "bù prior nền đúng chiều, cả Nhánh B lẫn Detector chạy đầu-cuối")

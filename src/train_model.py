@@ -177,7 +177,7 @@ def train_random_forest(X, y, n_estimators=300, max_depth=None, min_samples_leaf
     return clf, time.perf_counter() - t0
 
 
-def save_model(clf, feature_cols, path, extra=None):
+def save_model(clf, feature_cols, path, extra=None, crop_mode="rotated"):
     """Lưu một BUNDLE, không phải mỗi clf.
 
     Chỉ có clf là không đủ: một mảng 395 số không tự nói lên cột nào là cột nào, và một
@@ -197,6 +197,9 @@ def save_model(clf, feature_cols, path, extra=None):
         "score_thr": config.SCORE_THR,
         "nms_iou": config.NMS_IOU,
         "neg_sample_rate": config.NEG_SAMPLE_RATE,
+        # "rotated": ô car/empty cắt theo rotatedRect từ nhãn -> CHỈ dùng được cho Nhánh B.
+        # "axis"   : cắt bằng khung trượt vuông góc -> dùng được cho cả tự dò (infer.auto_layout).
+        "crop_mode": crop_mode,
         "trained_at": datetime.now().isoformat(timespec="seconds"),
         "sklearn_version": sklearn.__version__,
         "val_metrics": extra or {},
@@ -275,6 +278,12 @@ def main():
     ap.add_argument("--min-samples-leaf", type=int, default=None, help="mặc định: 50 cho dt, 5 cho rf")
     ap.add_argument("--n-estimators", type=int, default=300, help="chỉ dùng cho rf")
     ap.add_argument("--sample", type=float, default=None, help="tỉ lệ dòng TRAIN giữ lại (0-1)")
+    ap.add_argument("--feat-dir", default=None,
+                    help="thư mục shard parquet. Mặc định config.FEAT (ô cắt xoay thẳng). "
+                         "Dùng ../features_axis cho bộ cắt vuông góc (build_dataset --axis-aligned).")
+    ap.add_argument("--crop-mode", default=None, choices=["rotated", "axis"],
+                    help="ghi vào bundle để UI biết model có dùng được cho tự dò không. "
+                         "Mặc định suy từ tên --feat-dir.")
     ap.add_argument("--score-thr", type=float, default=None)
     ap.add_argument("--nms-iou", type=float, default=None,
                     help="mặc định config.NMS_IOU. ĐỪNG đặt > 0.44: hai cửa sổ đồng tâm ở hai tỉ "
@@ -306,8 +315,10 @@ def main():
     detect.self_test()
     evaluate_pklot.self_test()
 
-    print(f"\n[1/4] Đọc feature (train + {a.eval_split})…")
-    df = load_features(splits=("train", a.eval_split), sample=a.sample)
+    crop_mode = a.crop_mode or ("axis" if a.feat_dir and "axis" in str(a.feat_dir) else "rotated")
+    print(f"\n[1/4] Đọc feature (train + {a.eval_split}) từ {a.feat_dir or config.FEAT}"
+          f"  [ô cắt {'VUÔNG GÓC' if crop_mode == 'axis' else 'xoay thẳng'}]…")
+    df = load_features(splits=("train", a.eval_split), feat_dir=a.feat_dir, sample=a.sample)
     train_df = df[df["split"] == "train"]
     eval_df = df[df["split"] == a.eval_split]
     print(f"  train: {len(train_df):,} cửa sổ / {train_df.image_id.nunique()} ảnh"
@@ -393,7 +404,7 @@ def main():
             print(f"  cấu hình hiện tại (config.py): mAP_macro {cur.iloc[0].mAP_macro:.4f}")
 
     if a.save:
-        path = save_model(clf, feat_cols, a.save, extra={
+        path = save_model(clf, feat_cols, a.save, crop_mode=crop_mode, extra={
             "split": a.eval_split, "bg_veto": bg_veto, **{k: round(v, 4) for k, v in metrics.items()}})
         load_model(path)   # nạp lại ngay để hợp đồng nhãn/feature được kiểm ngay lúc lưu
         print(f"\n💾 Đã lưu bundle {path} ({path.stat().st_size / 1e6:.1f} MB) — nạp lại OK")
@@ -409,7 +420,7 @@ def main():
             exp = "Baseline B (Decision Tree)"
         # nms_iou PHẢI nằm trong nhãn: nó đổi mAP gấp 2,5 lần (0.2743 -> 0.6782 với RF), nên hai
         # dòng cùng model mà khác nms_iou trông sẽ mâu thuẫn nhau nếu không ghi rõ.
-        exp += (f" [nms={a.nms_iou or config.NMS_IOU}, "
+        exp += (f" [cắt {crop_mode}, nms={a.nms_iou or config.NMS_IOU}, "
                 f"phủ quyết nền {'BẬT' if bg_veto else 'TẮT'}]")
         note = (f"{cfg} score_thr={a.score_thr or config.SCORE_THR} "
                 f"nms_iou={a.nms_iou or config.NMS_IOU}; "
