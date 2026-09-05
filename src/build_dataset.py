@@ -11,6 +11,7 @@ from PIL import Image
 
 import config
 import features
+import infer
 import pklot_data
 import windows
 
@@ -29,9 +30,26 @@ def _rotated_crop(image, cx, cy, w, h, angle):
     return cv2.getRectSubPix(rotated, (max(1, round(w)), max(1, round(h))), (cx, cy))
 
 
-def build_shard(shard_id, n_shards, seed=None):
+def build_shard(shard_id, n_shards, seed=None, axis_aligned=False, out_dir=None, n_jobs=None):
     """Trích feature cho 1 shard ảnh (chia đều & xen kẽ từ processed/splits.json).
-    Lưu features/shard_<id>_of_<n>.parquet. Mỗi người chạy 1-2 shard (KE_HOACH.md §7 Ngày 3)."""
+    Lưu <out_dir>/shard_<id>_of_<n>.parquet. Mỗi người chạy 1-2 shard (KE_HOACH.md §7 Ngày 3).
+
+    axis_aligned=False (mặc định, bản gốc): ô car/empty được cắt theo rotatedRect ĐÃ XOAY THẲNG
+        lấy từ nhãn. Cho accuracy mức cửa sổ cao nhưng dùng thông tin mà lúc suy luận KHÔNG CÓ.
+
+    axis_aligned=True: ô car/empty cắt bằng chính KHUNG TRƯỢT vuông góc, y hệt lúc suy luận.
+
+    🔴 VÌ SAO CÓ CỜ NÀY. Đo trên 60 ảnh train / 10 ảnh val, cùng thuật toán, chỉ khác cách cắt:
+
+                                     xoay thẳng   vuông góc
+        accuracy cửa sổ (cắt cùng kiểu)   0.922      0.907
+        ô đỗ nhận đúng khi TỰ DÒ          0.000      0.779
+        mAP_macro khi TỰ DÒ               0.0054     0.7625
+
+    Bản xoay thẳng nhận đúng 0 ô khi trượt cửa sổ — gọi 100% là nền — vì mọi positive nó từng
+    thấy đều đã được xoay ngay ngắn nhờ nhãn. Đổi sang vuông góc chỉ mất 1,5 điểm accuracy mức
+    cửa sổ nhưng làm chế độ tự dò từ vô dụng thành dùng được.
+    """
     seed = seed if seed is not None else config.RANDOM_SEED
     rng = np.random.default_rng(seed + shard_id)
 
@@ -62,28 +80,33 @@ def build_shard(shard_id, n_shards, seed=None):
         win_boxes = list(windows.slide_windows(cw, ch))
         labeled = windows.label_windows(win_boxes, gt_boxes, gt_labels)
 
+        # Gom trước rồi trích một lượt: infer.extract_batch chia lô và chạy song song, nhanh ~8x
+        # so với gọi features.extract() từng cửa sổ (joblib phải pickle lại ảnh cho mỗi tác vụ).
+        # rng.random() vẫn được gọi ĐÚNG THỨ TỰ như bản cũ để tái lập được bộ nền đã lấy mẫu.
+        boxes, meta = [], []
         for wb, (cls, idx) in zip(win_boxes, labeled):
             if cls == "ignore":
                 continue
             if cls == "background" and rng.random() > config.NEG_SAMPLE_RATE:
                 continue
             x0, y0, x1, y1 = wb
-            if idx is not None:
+            if idx is not None and not axis_aligned:
                 # car/empty: cắt "dựng thẳng" theo rotatedRect thật — loại nền dư của box axis-aligned
                 rcx, rcy, rw, rh, rangle = gt_rot[idx]
-                win_crop = _rotated_crop(crop, rcx, rcy, rw, rh, rangle)
+                boxes.append(dict(zip(infer.ROT_KEYS, (rcx, rcy, rw, rh, rangle))))
             else:
-                win_crop = crop[y0:y1, x0:x1]
-            if win_crop.shape[:2] != (config.WINDOW_SIZE, config.WINDOW_SIZE):
-                win_crop = np.array(Image.fromarray(win_crop).resize((config.WINDOW_SIZE, config.WINDOW_SIZE)))
-            vec = features.extract(win_crop)
-            rows.append([image_id, lot, path_split[img_path], cls, x0, y0, x1, y1] + vec.tolist())
+                boxes.append((x0, y0, x1, y1))
+            meta.append([image_id, lot, path_split[img_path], cls, x0, y0, x1, y1])
+        if not boxes:
+            continue
+        vecs = infer.extract_batch(crop, boxes, n_jobs=n_jobs)
+        rows.extend(m + v.tolist() for m, v in zip(meta, vecs))
 
     cols = ["image_id", "lot", "split", "class", "x_min", "y_min", "x_max", "y_max"] + features.feature_names()
     df = pd.DataFrame(rows, columns=cols)
     df[features.feature_names()] = df[features.feature_names()].astype(np.float32)  # float64->32: nửa dung lượng, không mất độ chính xác thực dụng
 
-    out_dir = config.FEAT
+    out_dir = Path(out_dir) if out_dir else config.FEAT
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"shard_{shard_id:02d}_of_{n_shards}.parquet"
     df.to_parquet(out_path, index=False)
@@ -95,11 +118,25 @@ if __name__ == "__main__":
     import time
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--shard", type=int, required=True)
+    parser.add_argument("--shard", type=int, help="chỉ số shard; bỏ trống = chạy hết")
     parser.add_argument("--n-shards", type=int, default=8)
+    parser.add_argument("--axis-aligned", action="store_true",
+                        help="cắt ô car/empty bằng khung trượt vuông góc thay vì rotatedRect. "
+                             "BẮT BUỘC nếu muốn chế độ tự dò chạy được — xem docstring build_shard().")
+    parser.add_argument("--out-dir", default=None, help="mặc định config.FEAT")
+    parser.add_argument("--n-jobs", type=int, default=None, help="mặc định config.N_JOBS")
     args = parser.parse_args()
 
-    t0 = time.perf_counter()
-    path, n_rows, n_imgs = build_shard(args.shard, args.n_shards)
-    print(f"shard {args.shard}/{args.n_shards}: {n_imgs} ảnh -> {n_rows} window, "
-          f"{time.perf_counter() - t0:.1f}s -> {path}")
+    shards = [args.shard] if args.shard is not None else range(args.n_shards)
+    t_all = time.perf_counter()
+    total = 0
+    for s in shards:
+        t0 = time.perf_counter()
+        path, n_rows, n_imgs = build_shard(s, args.n_shards, axis_aligned=args.axis_aligned,
+                                           out_dir=args.out_dir, n_jobs=args.n_jobs)
+        total += n_rows
+        print(f"shard {s}/{args.n_shards}: {n_imgs} ảnh -> {n_rows:,} cửa sổ, "
+              f"{time.perf_counter() - t0:.0f}s -> {path}", flush=True)
+    if len(list(shards)) > 1:
+        print(f"\nXONG {total:,} cửa sổ trong {(time.perf_counter() - t_all)/60:.1f} phút"
+              f"  (cắt {'VUÔNG GÓC' if args.axis_aligned else 'xoay thẳng'})")

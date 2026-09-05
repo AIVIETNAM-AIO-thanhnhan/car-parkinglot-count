@@ -18,6 +18,12 @@ raw/
 *.jpeg
 *.png
 
+# Gói tải về từ Drive (pklot_project-*.zip, features-*.zip — ~7GB ở thư mục gốc)
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
 # NGOẠI LỆ: hình cho báo cáo thì giữ lại
 !report/figures/*.png
 
@@ -85,6 +91,9 @@ desktop.ini
 kaggle.json
 *.key
 credentials*.json
+
+# --- TÀI LIỆU NỘI BỘ (không commit) ---
+DEVELOPMENT.md
 
 # --- TẠM ---
 tmp/

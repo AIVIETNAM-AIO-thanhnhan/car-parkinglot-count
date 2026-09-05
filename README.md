@@ -1,184 +1,200 @@
-# Phát hiện và Đếm Chỗ Đỗ Xe
+# Đếm Chỗ Đỗ Xe
 
-Phát hiện ô đỗ xe từ ảnh camera giám sát, phân loại **có xe / còn trống**, và đếm số chỗ trống — chỉ dùng học máy cổ điển, không dùng CNN.
+Đưa vào một ảnh bãi đỗ, nhận về **số xe · số chỗ trống · tỉ lệ lấp đầy**.
 
-Đồ án Module 3 · nhóm 4 người · 23/08 → 07/09/2026
-
----
-
-## Bài toán
-
-```
-Ảnh bãi đỗ  →  danh sách ô đỗ  →  3 con số
-```
-
-| Output | Ví dụ |
-|---|---|
-| Box + nhãn + độ tin cậy | `(120,80,165,110, "có xe", 0.91)` × N ô |
-| Số xe | 42 |
-| **Số chỗ trống** | 18 |
-| Tỉ lệ lấp đầy | 70% |
-
-Ba con số cuối là thứ hiển thị trên bảng điện tử đầu bãi.
-
-**Dataset:** [PKLot](https://web.inf.ufpr.br/vri/databases/parking-lot-database) — 12.417 ảnh 1280×720, 3 bãi đỗ, 3 điều kiện thời tiết, giấy phép CC BY 4.0.
+Dùng học máy cổ điển (HOG + LBP + màu + kết cấu → Random Forest). Không cần GPU.
 
 ---
 
-## Bắt đầu nhanh
+## Cài đặt
 
 ```bash
 git clone https://github.com/AIVIETNAM-AIO-thanhnhan/car-parkinglot-count.git
 cd car-parkinglot-count
 pip install -r requirements.txt
-bash scripts/download_data.sh raw      # ~2GB, chỉ P2 chạy — cần wget (macOS: brew install wget)
 ```
 
-Mở `notebooks/00_setup.ipynb` và chạy ô đầu tiên — cell tự nhận diện môi trường
-(`try: import google.colab`): trên Colab thì mount Drive, cài thiếu, clone/pull repo;
-chạy local thì bỏ qua, dùng `src/` ngay trong repo đã clone. Không cần sửa gì thủ công.
+Cần Python 3.9+. Trên Windows đặt `PYTHONIOENCODING=utf-8` trước khi chạy `python`.
 
 ---
 
-## Phân vai
+## Chuẩn bị model
 
-| | Vai trò | Sở hữu | File |
-|---|---|---|---|
-| **P1** | Tech Lead | Harness, config, quét ngưỡng, tích hợp, báo cáo | `evaluate*.py`, `config.py`, `baselines.py` |
-| **P2** | Data Engineer | Parse XML, cắt vùng, split, canh test set | `pklot_data.py`, `build_dataset.py` |
-| **P3** | Pipeline Engineer | Cửa sổ trượt, feature, tốc độ, ablation | `windows.py`, `features.py` |
-| **P4** | Model Engineer | DT → RF → mining → LightGBM | `train_model.py` |
+Repo **không kèm sẵn model** (file ~180 MB). Cần train một lần, tổng khoảng **1,5 giờ**:
 
-> ⚠️ **P4 là điểm nghẽn** — gánh chuỗi model liên tục Ngày 5→12. P2 chuyển sang hỗ trợ P4 từ Ngày 6. P1 nên đọc hiểu code của P4 từ Ngày 7 để tiếp quản được nếu cần.
-
-**Notebook:** mỗi người dùng file riêng (`p1_*`, `p2_*`...). Notebook lưu cả output nên hai người sửa cùng file sẽ conflict liên tục.
-
----
-
-## Cấu trúc
-
-```
-car-parkinglot-count/        ← Git: chỉ code
-├── src/                     Module Python, mỗi file 1 chủ sở hữu
-├── notebooks/               Mỗi người 1 file
-├── scripts/                 setup_project.sh, download_data.sh
-├── processed/splits.json    🔒 Commit vào Git để tái lập được
-├── report/                  Báo cáo + hình
-└── results.csv              🔑 Bảng theo dõi của P1
-
-MyDrive/pklot_project/       ← Drive: chỉ dữ liệu
-├── raw/PKLot/               ⛔ KHÔNG BAO GIỜ SỬA
-├── processed/               index.csv, gt.csv, crops.json
-├── features/                *.parquet (cache, sinh 1 lần)
-├── models/                  *.pkl
-└── predictions/             <model>__<split>.csv
+```bash
+bash scripts/download_data.sh raw                     # tải PKLot ~2 GB        (15-40 phút)
+cd src
+python pklot_data.py                                  # đọc nhãn, chia dữ liệu     (2 phút)
+python build_dataset.py --axis-aligned \
+       --out-dir ../features_axis                     # trích đặc trưng           (~36 phút)
+python train_model.py --model rf --feat-dir ../features_axis \
+       --save ../models/rf_axis.joblib                # train                      (~8 phút)
 ```
 
----
+Bước trích đặc trưng chiếm gần hết thời gian: 1,18 triệu khung ảnh, mỗi khung 395 đặc trưng.
+Chỉ phải chạy một lần — kết quả được cache lại.
 
-## Bốn quy tắc không được vi phạm
-
-1. **Harness viết xong và PASS self-test trước khi ai train** (Ngày 2)
-2. **Chia split theo bãi đỗ, khóa vĩnh viễn** — không bao giờ chia ngẫu nhiên
-3. **Test set chỉ mở Ngày 12, một lần duy nhất**
-4. **CODE FREEZE Ngày 11** — sau đó chỉ sửa bug và viết báo cáo
+> `--axis-aligned` là bắt buộc nếu muốn dùng chế độ **tự dò layout**. Bỏ cờ này thì ô đỗ được
+> cắt theo góc xoay lấy từ nhãn — chỉ dùng được khi đã biết trước vị trí ô.
 
 ---
 
-## Vì sao phải chia theo bãi đỗ
+## Dùng
 
-Camera PKLot **cố định**, chụp 5 phút/lần suốt 30 ngày. Vị trí ô đỗ giống hệt nhau trong mọi ảnh của cùng một bãi, và xe đỗ lại hàng giờ.
+### Giao diện
 
-Nên một chương trình chỉ **ghi nhớ vị trí ô** — không nhìn một pixel nào của ảnh test — vẫn đạt điểm cao:
+```bash
+streamlit run app/streamlit_app.py
+```
 
-| Cách chia test | mAP của Baseline A |
-|---|---|
-| Ngẫu nhiên, cùng ngày | **0.76** |
-| 10 ngày sau, cùng bãi | 0.48 |
-| **Bãi đỗ khác** | **0.00** |
+Tải ảnh lên → ba con số, ảnh có vẽ khung (🟩 trống, 🟥 có xe), và nút tải kết quả dạng CSV.
+Có thể ghi thêm lên từng khung: toạ độ, kích thước, độ tin cậy hoặc số thứ tự.
 
-Chạy `baselines.run_all()` ở Ngày 2. Nếu điểm cao → split đang sai, phải chia lại.
+### Trong code
 
----
+```python
+import sys; sys.path.insert(0, "src")
+import infer
 
-## Model
+bundle = infer.load_model("models/rf_axis.joblib")
+img    = infer.load_image("bai_xe.jpg")
+slots  = infer.slot_boxes_from_xml("bai_xe.xml")     # vị trí các ô đỗ
 
-| Ngày | Model | Học ở | Bắt buộc? |
-|---|---|---|---|
-| 5 | Decision Tree | W1 ✅ | ✅ |
-| 6–7 | Random Forest | W2 ✅ | ✅ |
-| 8–9 | + Hard negative mining | W2 ✅ | ✅ |
-| 10 | LightGBM | W3 (28/08) | Nếu kịp |
-| 11 | Optuna | W3 (29/08) | Nếu kịp |
+pred = infer.classify_slots(img, slots, bundle)
+print(infer.count_from_predictions(pred))
+# {'cars': 17, 'empty': 11, 'total': 28, 'occupancy_pct': 60.71428571428572}
 
-Đóng góp dự kiến: Random Forest **+0.25**, mining **+0.13**, LightGBM +0.04, Optuna +0.03. Hai bước đầu chiếm gần hết — nếu thiếu thời gian, dừng ở mining vẫn có dự án hoàn chỉnh.
+infer.draw_boxes(img, pred).save("ket_qua.jpg")
+```
 
-### Tiêu chí thành công
+Chưa có file XML? Để nó tự tìm vị trí ô từ nhiều ảnh cùng camera, rồi lưu lại dùng mãi:
 
-| Mức | Ngưỡng |
-|---|---|
-| ❌ Thất bại | Không vượt Baseline A |
-| ⚠️ Tối thiểu | mAP > 0.35 |
-| ✅ Tốt | mAP > 0.50, sai số chỗ trống < 3 ô |
-
----
-
-## Bốn đặc thù PKLot đã xử lý
-
-| Vấn đề | Giải pháp | Hàm |
-|---|---|---|
-| PUCPR chỉ gán nhãn ~100/300 ô | Cắt về vùng có nhãn → nhãn thành đầy đủ | `annotated_region()` |
-| Ảnh chụp 5 phút/lần, gần trùng nhau | Giữ 1 ảnh/2 giờ (156 → 7 ảnh/ngày) | `temporal_subsample()` |
-| Camera chéo, ô gần to hơn ô xa | Đo tỉ lệ méo, bật multi-scale nếu > 2.0 | `perspective_report()` |
-| Hai lớp cùng hình dạng | Tín hiệu ở **màu và kết cấu**, không phải hình dạng | — |
+```python
+slots = infer.auto_layout([infer.load_image(p) for p in anh_cung_camera], bundle)
+open("layout.xml", "w", encoding="utf-8").write(infer.slots_to_xml(slots, "bai_cua_toi"))
+```
 
 ---
 
-## Quy ước
+## Hai chế độ
 
-**File dự đoán:**
+| | Cần gì | Sai số chỗ trống | Tốc độ |
+|---|---|---:|---|
+| **Ô cố định** *(khuyên dùng)* | vị trí các ô đỗ | **0,4 ô** | 0,2 giây/ảnh |
+| **Tự dò layout** | 5–20 ảnh cùng camera | **0,8 ô** | 8 giây/ảnh |
+
+Camera bãi đỗ cố định, nên vị trí các ô chỉ cần xác định **một lần** rồi dùng mãi.
+
+**Tự dò** làm việc đó tự động: đưa vào nhiều ảnh chụp khác thời điểm của cùng camera, nó gom dự
+đoán qua các ảnh và giữ những vị trí xuất hiện lặp lại. Xe đổi chỗ giữa các ảnh nên ô bị che ở
+ảnh này sẽ lộ ra ở ảnh khác. Đo trên 29 ảnh UFPR04: tìm ra **đúng 28 ô** (thực tế 28), và đếm
+bằng layout tự dò cho sai số **0,8 ô** — gần bằng dùng layout thật (0,4 ô).
+
+Sau khi dò, bấm **⬇️ Tải layout (.xml)** để dùng lại cho những lần sau mà không phải dò lại.
+
+Cũng có thể khai báo tay: file XML định dạng PKLot, hoặc dán toạ độ JSON `[[x1,y1,x2,y2], ...]`.
+
+> ⚠️ Tự dò cần model huấn luyện từ **ô cắt vuông góc** (`models/rf_axis.joblib`). Model cắt xoay
+> thẳng (`rf.joblib`) không tự dò được — giao diện sẽ báo rõ nếu bạn chọn nhầm.
+>
+> Layout tự dò dùng khung **vuông**, bám đúng vị trí nhưng không ôm khít ô đỗ nghiêng
+> (IoU trung vị 0,46). Đủ tốt để đếm, nhưng nên xem lại bằng mắt trước khi dùng lâu dài.
+
+---
+
+## Cách hoạt động
+
+```
+ảnh  →  cắt từng ô  →  395 đặc trưng mỗi ô  →  Random Forest  →  đếm
+                       HOG · LBP · màu · kết cấu
+```
+
+Xe và chỗ trống có cùng hình chữ nhật, nên tín hiệu phân biệt nằm ở **màu và kết cấu** chứ không
+phải hình dạng.
+
+Chế độ "tự dò" thêm một bước phía trước: quét khung trượt ở 5 kích cỡ khắp ảnh (~18.000 khung),
+lọc theo ngưỡng tin cậy rồi gộp các khung chồng nhau.
+
+---
+
+## Dữ liệu huấn luyện
+
+579 ảnh (lọc từ 12.417 ảnh gốc, giữ 1 ảnh mỗi 2 giờ vì ảnh chụp 5 phút/lần gần như trùng nhau):
+
+| Tập | Bãi | Ảnh |
+|---|---|---:|
+| **train** | UFPR04 + UFPR05 | 340 |
+| **val** | UFPR04 — *khác ngày* với train | 29 |
+| **test** | **PUCPR — bãi khác hoàn toàn** | 210 |
+
+Chia **theo bãi đỗ**, không chia ngẫu nhiên. Camera cố định chụp suốt 30 ngày nên vị trí ô giống
+hệt nhau ở mọi ảnh cùng bãi; chia ngẫu nhiên thì một chương trình *chỉ ghi nhớ vị trí ô* — không
+nhìn một pixel nào — cũng đạt điểm cao. Kiểm bằng đúng phép thử đó:
+
+| Cách chia | Điểm của "chỉ nhớ vị trí" |
+|---|---:|
+| Ngẫu nhiên, cùng ngày | 0.76 ← rò rỉ dữ liệu |
+| Khác ngày, cùng bãi (= val) | 0.52 |
+| **Bãi khác (= test)** | **0.00** ✅ |
+
+---
+
+## Độ chính xác
+
+Đo trên **val** — bãi UFPR04, những ngày không dùng để huấn luyện, 28 ô đỗ mỗi ảnh:
+
+| | Sai số số chỗ trống | Ghi chú |
+|---|---:|---|
+| **Ô cố định** (layout thật) | **0,41 ô** | 98,6% ô phân loại đúng |
+| **Tự dò layout** | **0,76 ô** | tự tìm ra đúng 28/28 ô |
+
+Cả hai đều dưới ngưỡng 3 ô — mức "tốt" theo tiêu chí đặt ra ban đầu của dự án.
+
+### Khi đổi sang bãi hoàn toàn khác
+
+Đo trên **test** (PUCPR — camera khác, độ cao khác, ô đỗ nhỏ hơn một nửa):
+
+| | Cùng bãi (val) | Bãi khác (test) |
+|---|---:|---:|
+| **Phân loại** — đã biết vị trí ô | 98,6% | **96,5%** |
+| **Tự dò** — tự tìm vị trí ô | 28 ô đúng | **hỏng** |
+
+**Phân loại gần như không suy giảm** — phân biệt xe/chỗ trống dựa vào màu và kết cấu, khá phổ quát.
+
+**Tự dò thì không dùng được ở bãi lạ.** Kích thước khung quét (96 px) được đo theo ô đỗ của UFPR;
+ô của PUCPR chỉ 46×52 px, và "nền" mà model học là nhựa đường/cây cối của UFPR.
+
+→ Với camera mới, hãy **khai báo vị trí ô một lần** thay vì dựa vào tự dò.
+
+---
+
+## Định dạng kết quả
+
 ```csv
 image_id,x_min,y_min,x_max,y_max,label,score
-UFPR04_2012-09-11_15_16_58,120,80,165,110,1,0.91
+bai_xe,120,80,165,110,1,0.91
 ```
-`label`: 1 = có xe, 0 = còn trống. Tọa độ trong hệ ảnh **đã cắt**.
 
-**Tên file:** `<model>__<split>__<tham_số>.csv` — hai gạch dưới ngăn cách.
-
-**Tên feature:** tiền tố nhóm bắt buộc — `hog_` (324), `lbp_` (10), `color_` (54), `tex_` (7). Tổng 395 chiều. SHAP gộp theo tiền tố.
+`label`: **0 = ô trống, 1 = có xe**. `score` là độ tin cậy 0–1.
 
 ---
 
-## Nhịp làm việc
+## Gặp lỗi?
 
-| | Tần suất |
+| Lỗi | Cách xử lý |
 |---|---|
-| Cập nhật `results.csv` | Cuối mỗi ngày |
-| Họp đứng 20 phút | Thứ 3 & Thứ 6 |
-| Review chéo code | P1→P2→P3→P4→P1 |
-
-Mọi số đưa vào báo cáo **phải sinh ra từ `evaluate_pklot.py`**. Số tự tính tay không được dùng.
-
----
-
-## Gỡ lỗi thường gặp
-
-**`ModuleNotFoundError: pyarrow`** — thiếu thì không đọc được `.parquet`. Chạy `pip install pyarrow`.
-
-**Notebook conflict khi `git pull`** — vào Kernel → Restart & Clear Output rồi commit lại. Notebook lưu cả output nên rất dễ conflict.
-
-**`splits.json` không lên Git** — `.gitignore` dùng `processed/*` chứ không phải `processed/`, vì Git không cho lấy lại file nếu cả thư mục cha bị loại trừ. Cũng lưu ý `.gitignore` **không hỗ trợ comment cuối dòng**.
-
-**Colab ngắt session** — feature đã cache trên Drive nên chỉ mất shard đang chạy (~1 phút). Chạy lại `build_dataset.py` với đúng `--shard`.
-
-**mAP = 0 mà không rõ vì sao** — kiểm tra tọa độ box có nằm trong hệ ảnh **đã cắt** không. Đây là lỗi phổ biến nhất.
+| **Khung vẽ lên cây, lối đi, mặt đường** | vị trí ô đang lấy từ **bãi khác** với ảnh. Dùng đúng cặp ảnh + XML, hoặc chọn đúng tên ảnh trong danh sách |
+| `UnicodeEncodeError` trên Windows | đặt `PYTHONIOENCODING=utf-8` |
+| `ModuleNotFoundError: cv2` | `pip install opencv-python-headless scikit-image` |
+| Giao diện báo "Chưa có model" | chưa chạy bước train ở trên |
+| `Không thấy shard nào` | chưa chạy `build_dataset.py` |
+| `thứ tự feature của model khác features.py` | model cũ không còn tương thích — train lại |
+| Tự dò báo "Model này không tự dò được" | dùng `rf_axis.joblib`, xem mục "Hai chế độ" |
 
 ---
 
-## Tài liệu
+## Nguồn & giấy phép
 
-| File | Nội dung |
-|---|---|
-| `KE_HOACH.md` | Kế hoạch 16 ngày (bản gọn) |
-| `PROJECT_PLAN_PKLOT.md` | Bản đầy đủ, tra cứu chi tiết |
-| `report/BAO_CAO.md` | Báo cáo cuối |
+Dữ liệu: [PKLot](https://web.inf.ufpr.br/vri/databases/parking-lot-database) — 12.417 ảnh, 3 bãi
+đỗ, 3 điều kiện thời tiết. CC BY 4.0, Đại học Liên bang Paraná.
