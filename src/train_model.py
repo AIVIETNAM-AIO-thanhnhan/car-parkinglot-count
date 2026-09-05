@@ -19,67 +19,50 @@ def load_data(file_patten):
 
 def preprocess_data(data):
     data = data[data['class'] != 'ignore']
+
     train_dt = data[data['split'] == 'train']
     test_dt = data[data['split'] == 'test']
     val_dt = data[data['split'] == 'val']
-    Y_test = (data[data['split'] == 'test']).astype(int)  
-    Y_train = (train_dt['class'] == 'car').astype('int')
-    Y_val = (val_dt['class'] == 'car').astype('int')
-    return train_dt.iloc[:, 8:], Y_train, val_dt.iloc[:, 8:], Y_val, test_dt.iloc[:, 8:],Y_test
 
+    label_map = {
+        'background': 0,
+        'empty': 1,
+        'car': 2
+    }
+
+    Y_train = train_dt['class'].map(label_map).astype(int)
+    Y_val = val_dt['class'].map(label_map).astype(int)
+    Y_test = test_dt['class'].map(label_map).astype(int)
+
+    return (
+        train_dt.iloc[:, 8:], Y_train,
+        val_dt.iloc[:, 8:], Y_val,
+        test_dt.iloc[:, 8:], Y_test
+    )
 def train_model(Xtrain, Ytrain):
     model = DecisionTreeClassifier(
-        criterion='entropy', 
-        splitter='best', 
-        max_depth=10, 
-        min_samples_split=500,
-        min_samples_leaf=50,
-        class_weight='balanced',
-        random_state=42
+        criterion='entropy',
+        splitter='best',
+        max_depth=13,
+        min_samples_split=100,
+        min_samples_leaf=20,
+        random_state=42,
+        class_weight='balanced'
         )
     model.fit(Xtrain, Ytrain)
     return model
 def train_model_RF(Xtrain, Ytrain):
     model = RandomForestClassifier(
-    n_estimators=100,
-    criterion='entropy',
-    max_depth=10,
-    min_samples_split=500,
+    n_estimators=200,
+    criterion='gini',
+    max_depth=26,
+    min_samples_split=200,
     min_samples_leaf=50,
     class_weight='balanced',
     n_jobs=-1,
     random_state=42
     )
-    model.fit(X_train, Y_train)
-    return model
-def train_model_RF(Xtrain, Ytrain):
-    model = RandomForestClassifier(
-    n_estimators=100,
-    criterion='entropy',
-    max_depth=10,
-    min_samples_split=500,
-    min_samples_leaf=50,
-    class_weight='balanced',
-    n_jobs=-1,
-    random_state=42
-    )
-    model.fit(X_train, Y_train)
-    return model
-def train_model_hmn(X_new, Y_new):
-    """X_new = Xtrain + X_val_predict (False)
-       Y_new = ..........
-    """
-    model_hnm = RandomForestClassifier(
-    n_estimators=100,
-    criterion='entropy',
-    max_depth=10,
-    min_samples_split=500,
-    min_samples_leaf=50,
-    class_weight='balanced',
-    n_jobs=-1,
-    random_state=42
-)
-    model_hnm.fit(X_new, Y_new)
+    model.fit(Xtrain, Ytrain)
     return model
 if __name__ == '__main__':
     file = r'.paquet'
