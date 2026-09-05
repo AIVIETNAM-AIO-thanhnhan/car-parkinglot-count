@@ -25,6 +25,12 @@ Dùng:
     python train_model.py --sweep-threshold      # + quét SCORE_THR trên val
     python train_model.py --no-log               # không ghi vào results.csv
     python train_model.py --model rf --save ../models/rf.joblib    # RF + lưu bundle cho UI
+    python train_model.py --model rf --preset optuna --sweep-threshold   # bộ tham số dò từ main
+
+⚠️ --preset optuna: bộ tham số port từ nhánh main (merge 05/09). Optuna bên đó tối ưu **macro F1
+   mức cửa sổ**, KHÔNG phải mAP_macro — nên preset là điểm khởi đầu để thử, chưa phải kết luận.
+   Chạy xong phải đọc mAP_macro ở bước [4/4] rồi so với sàn 0.5176 mới biết nó hơn hay kém bộ
+   mặc định. Xem OPTUNA_PRESETS để biết các cảnh báo còn lại.
 """
 import argparse
 import csv
@@ -139,12 +145,53 @@ def window_report(y_true, y_pred, title="cửa sổ"):
     return {"window_accuracy": acc, "majority_accuracy": majority}
 
 
-def train_decision_tree(X, y, max_depth=12, min_samples_leaf=50, seed=None):
+# Bộ tham số do Optuna dò trên nhánh main (10 trial mỗi model), port sang bằng --preset optuna.
+#
+# ✅ RF: ĐÃ KIỂM CHỨNG BẰNG mAP (05/09, val, score_thr=0.5 nms=0.20) — preset THẮNG rõ:
+#       preset   mAP_macro 0.7787 | AP_occ 0.8162 | AP_empty 0.7413 | free_slots_MAE 3.31 | 332s
+#       mặc định mAP_macro 0.6042 | AP_occ 0.6487 | AP_empty 0.5597 | free_slots_MAE 8.00 | 598s
+#     Tốt nhất trong sweep: 0.8111 tại score_thr=0.4, nms_iou=0.20.
+#     Mặc định thua vì QUÁ KHỚP: max_depth=None + leaf=5 -> cây sâu tb 84, train accuracy 1.0000,
+#     val recall tụt còn 0.642 (ô trống) / 0.693 (có xe). Chi tiết: bao_cao_random_forest.md §6.
+# ⏳ DT: preset chưa được đo bằng mAP. Chạy: --model dt --preset optuna --sweep-threshold
+#
+# ⚠️ NGUỒN GỐC — đọc trước khi tin những con số Optuna gốc:
+#   - Chỉ số Optuna tối ưu là **macro F1 mức CỬA SỔ trên val**, KHÔNG phải mAP_macro mức box
+#     (chỉ số §5). DT Trial 0 = 0.8660 | RF Trial 4 = 0.9519 — KHÔNG so được với sàn 0.5176.
+#     Đo thật cho thấy macro F1 xếp hạng ĐÚNG (0.955 > 0.855, cùng chiều với mAP) nhưng ĐỘ LỚN
+#     sai nặng: 0.9519 thực ra ứng với mAP 0.7787. Dùng để xếp hạng ứng viên thì được, dùng để
+#     báo cáo kết quả thì không.
+#   - Bảng nhãn bên main ngược với ở đây (main: 0=nền,1=trống,2=xe). Điều đó KHÔNG làm hỏng
+#     bộ tham số: hoán vị nhãn là song ánh, cây học ra cấu trúc y hệt và 'balanced' tính trọng
+#     số theo tần suất từng lớp nên cũng bất biến. Chỉ ĐIỂM SỐ và file .pkl của main là không
+#     dùng lại được, còn tham số thì chuyển thẳng sang được. Hai báo cáo trong report/ đã được
+#     đánh số lại theo quy ước ở đây (05/09); file .pkl trên Drive thì CHƯA — xem models/models.md.
+#   - ✅ ĐÃ XÁC MINH (05/09) không rò rỉ nhãn. Bên main chọn cột bằng iloc[:, 8:], và
+#     features/shard_*.parquet (do build_dataset.py sinh) có đúng 403 cột = 8 meta + 395 feature,
+#     không có cột 'label'. Phân bố lớp của cả 3 split khớp tuyệt đối với 9 con số trong báo cáo
+#     -> sweep đã chạy trên chính bộ này, iloc[:, 8:] lấy đúng 395 feature.
+#     (Cách chọn cột đó VẪN sai với parquet của build_features.py — bộ đó có thêm cột 'label'.)
+#
+# Nguồn: report/bao_cao_tham_so_Dtree.md §3 (Trial 0), report/bao_cao_random_forest.md §3 (Trial 4)
+OPTUNA_PRESETS = {
+    "dt": dict(criterion="entropy", max_depth=13, min_samples_split=100, min_samples_leaf=20),
+    "rf": dict(criterion="gini", max_depth=26, min_samples_split=200, min_samples_leaf=50,
+               n_estimators=200),
+}
+
+
+def train_decision_tree(X, y, max_depth=12, min_samples_leaf=50, seed=None,
+                        criterion="gini", min_samples_split=2):
     """Baseline B (KE_HOACH.md §4). class_weight='balanced' vì lớp nền áp đảo — không có nó,
     cây tối ưu accuracy bằng cách đoán 'nền' gần như mọi nơi và không bắt được ô nào.
-    max_depth giới hạn để cây còn ĐỌC ĐƯỢC — đó là lý do dùng DT ở ngày 5, không phải vì điểm cao."""
+    max_depth giới hạn để cây còn ĐỌC ĐƯỢC — đó là lý do dùng DT ở ngày 5, không phải vì điểm cao.
+
+    Mặc định giữ nguyên như trước 05/09 để các dòng cũ trong results.csv còn tái lập được;
+    bộ Optuna lấy qua --preset optuna (xem OPTUNA_PRESETS)."""
     clf = DecisionTreeClassifier(
+        criterion=criterion,
         max_depth=max_depth,
+        min_samples_split=min_samples_split,
         min_samples_leaf=min_samples_leaf,
         class_weight="balanced",
         random_state=seed if seed is not None else config.RANDOM_SEED,
@@ -154,21 +201,25 @@ def train_decision_tree(X, y, max_depth=12, min_samples_leaf=50, seed=None):
     return clf, time.perf_counter() - t0
 
 
-def train_random_forest(X, y, n_estimators=300, max_depth=None, min_samples_leaf=5, seed=None):
+def train_random_forest(X, y, n_estimators=300, max_depth=None, min_samples_leaf=5, seed=None,
+                        criterion="gini", min_samples_split=2, class_weight="balanced_subsample"):
     """Model chính (KE_HOACH.md §3, Ngày 6-9).
 
     class_weight='balanced_subsample' chứ không phải 'balanced': mỗi cây RF học trên một bootstrap
     khác nhau, cân trọng số theo chính mẫu bootstrap đó mới đúng — 'balanced' tính một lần trên
-    toàn bộ y rồi áp cho mọi cây.
+    toàn bộ y rồi áp cho mọi cây. Vẫn cho đổi qua tham số vì sweep Optuna bên main chạy với
+    'balanced' — muốn tái lập đúng con số 0.9519 thì phải dùng đúng giá trị đó.
 
     max_depth=None cố ý: RF chống overfit bằng bagging chứ không bằng cắt sâu, và ta KHÔNG cần
     đọc luật ở đây (đó là việc của Decision Tree ở Baseline B).
     """
     clf = RandomForestClassifier(
         n_estimators=n_estimators,
+        criterion=criterion,
         max_depth=max_depth,
+        min_samples_split=min_samples_split,
         min_samples_leaf=min_samples_leaf,
-        class_weight="balanced_subsample",
+        class_weight=class_weight,
         n_jobs=config.N_JOBS,
         random_state=seed if seed is not None else config.RANDOM_SEED,
     )
@@ -273,10 +324,20 @@ def main():
     ap.add_argument("--eval-split", default="val", choices=["val", "test"])
     ap.add_argument("--open-test-set-day-12", action="store_true",
                     help="Bắt buộc để chạy trên test. KE_HOACH.md §8 quy tắc 3: test mở 1 lần, Ngày 12.")
+    ap.add_argument("--preset", default=None, choices=["optuna"],
+                    help="optuna = bộ tham số dò trên nhánh main (OPTUNA_PRESETS). Cờ truyền tay "
+                         "vẫn thắng preset. LƯU Ý preset tối ưu theo macro F1 mức cửa sổ, không "
+                         "phải mAP — phải tự đọc mAP_macro ở [4/4] để kết luận.")
     ap.add_argument("--max-depth", type=int, default=None,
                     help="mặc định: 12 cho dt (để đọc được luật), None cho rf")
     ap.add_argument("--min-samples-leaf", type=int, default=None, help="mặc định: 50 cho dt, 5 cho rf")
-    ap.add_argument("--n-estimators", type=int, default=300, help="chỉ dùng cho rf")
+    ap.add_argument("--min-samples-split", type=int, default=None, help="mặc định: 2 (sklearn)")
+    ap.add_argument("--criterion", default=None, choices=["gini", "entropy", "log_loss"],
+                    help="mặc định gini")
+    ap.add_argument("--rf-class-weight", default=None, choices=["balanced_subsample", "balanced"],
+                    help="chỉ dùng cho rf. Mặc định balanced_subsample. Sweep Optuna bên main "
+                         "chạy với 'balanced' — cần giá trị đó để tái lập con số 0.9519.")
+    ap.add_argument("--n-estimators", type=int, default=None, help="chỉ dùng cho rf. Mặc định 300")
     ap.add_argument("--sample", type=float, default=None, help="tỉ lệ dòng TRAIN giữ lại (0-1)")
     ap.add_argument("--feat-dir", default=None,
                     help="thư mục shard parquet. Mặc định config.FEAT (ô cắt xoay thẳng). "
@@ -299,11 +360,30 @@ def main():
     a = ap.parse_args()
 
     # Mặc định theo từng loại model — đặt ở đây thay vì trong add_argument để biết người dùng
-    # có truyền tay hay không.
+    # có truyền tay hay không (None = không truyền).
+    #
+    # Thứ tự ưu tiên: cờ truyền tay > --preset > mặc định của dự án. Preset KHÔNG được ghi đè
+    # mặc định cũ khi không truyền --preset, nếu không các dòng results.csv trước 05/09 sẽ không
+    # tái lập được nữa.
+    if a.preset:
+        for k, v in OPTUNA_PRESETS[a.model].items():
+            if getattr(a, k) is None:
+                setattr(a, k, v)
+        if a.model == "rf" and a.rf_class_weight is None:
+            a.rf_class_weight = "balanced"   # sweep bên main chạy với 'balanced'
+
     if a.max_depth is None:
         a.max_depth = 12 if a.model == "dt" else None
     if a.min_samples_leaf is None:
         a.min_samples_leaf = 50 if a.model == "dt" else 5
+    if a.min_samples_split is None:
+        a.min_samples_split = 2
+    if a.criterion is None:
+        a.criterion = "gini"
+    if a.n_estimators is None:
+        a.n_estimators = 300
+    if a.rf_class_weight is None:
+        a.rf_class_weight = "balanced_subsample"
     bg_veto = not a.no_bg_veto
 
     if a.eval_split == "test" and not a.open_test_set_day_12:
@@ -328,16 +408,24 @@ def main():
     X_ev, y_ev, _ = split_xy(eval_df, feat_cols)
     print(f"  {len(feat_cols)} feature")
 
+    if a.preset:
+        print(f"\n  [preset={a.preset}] {OPTUNA_PRESETS[a.model]} "
+              f"(tối ưu theo macro F1 mức cửa sổ — chỉ số thật vẫn là mAP_macro ở [4/4])")
+
     if a.model == "rf":
         print(f"\n[2/4] Train Random Forest ({a.n_estimators} cây)…")
         clf, train_time = train_random_forest(
-            X_tr, y_tr, a.n_estimators, a.max_depth, a.min_samples_leaf)
+            X_tr, y_tr, a.n_estimators, a.max_depth, a.min_samples_leaf,
+            criterion=a.criterion, min_samples_split=a.min_samples_split,
+            class_weight=a.rf_class_weight)
         depths = [t.get_depth() for t in clf.estimators_]
         print(f"  xong sau {train_time:.1f}s — độ sâu trung bình {np.mean(depths):.1f}, "
               f"sâu nhất {max(depths)}")
     else:
         print("\n[2/4] Train Decision Tree…")
-        clf, train_time = train_decision_tree(X_tr, y_tr, a.max_depth, a.min_samples_leaf)
+        clf, train_time = train_decision_tree(
+            X_tr, y_tr, a.max_depth, a.min_samples_leaf,
+            criterion=a.criterion, min_samples_split=a.min_samples_split)
         print(f"  xong sau {train_time:.1f}s — độ sâu thật {clf.get_depth()}, {clf.get_n_leaves()} lá")
 
     if a.print_rules and a.model == "rf":
@@ -411,13 +499,17 @@ def main():
 
     if not a.no_log:
         if a.model == "rf":
-            cfg = (f"RF n_estimators={a.n_estimators} max_depth={a.max_depth} "
-                   f"min_samples_leaf={a.min_samples_leaf} class_weight=balanced_subsample")
+            cfg = (f"RF n_estimators={a.n_estimators} criterion={a.criterion} "
+                   f"max_depth={a.max_depth} min_samples_split={a.min_samples_split} "
+                   f"min_samples_leaf={a.min_samples_leaf} class_weight={a.rf_class_weight}")
             exp = "Random Forest"
         else:
-            cfg = (f"DT max_depth={a.max_depth} min_samples_leaf={a.min_samples_leaf} "
-                   f"class_weight=balanced")
+            cfg = (f"DT criterion={a.criterion} max_depth={a.max_depth} "
+                   f"min_samples_split={a.min_samples_split} "
+                   f"min_samples_leaf={a.min_samples_leaf} class_weight=balanced")
             exp = "Baseline B (Decision Tree)"
+        if a.preset:
+            exp += f" + preset {a.preset}"
         # nms_iou PHẢI nằm trong nhãn: nó đổi mAP gấp 2,5 lần (0.2743 -> 0.6782 với RF), nên hai
         # dòng cùng model mà khác nms_iou trông sẽ mâu thuẫn nhau nếu không ghi rõ.
         exp += (f" [cắt {crop_mode}, nms={a.nms_iou or config.NMS_IOU}, "
