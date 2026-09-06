@@ -100,3 +100,19 @@ tmp/
 temp/
 scratch/
 *.log
+
+# --- FILE BUILD CỦA LATEX ---
+# Chỉ commit .tex và .bib; mọi thứ dưới đây do trình biên dịch sinh ra.
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+report/*.pdf
