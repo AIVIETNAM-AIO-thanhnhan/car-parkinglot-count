@@ -2,6 +2,18 @@
 
 Ngày 5 (KE_HOACH.md §7): Decision Tree, Baseline B. Kỳ vọng mAP còn THẤP — đó là đúng.
 Ngày 6-9: Random Forest (--model rf), model chính.
+Ngày 10-11: LightGBM (--model lgbm) — model tốt nhất hiện tại trên val, xem bảng dưới.
+
+📊 ĐÃ ĐO trên val (score_thr=0.5, nms_iou=0.20, cắt rotated, 05/09):
+
+    model                       mAP_macro  AP_occ  AP_empty  free_slots_MAE  F1 cửa sổ  train
+    --model dt                    (chưa đo bằng mAP với preset optuna)
+    --model rf                       0.6042  0.6487    0.5597            8.00     0.8550   598s
+    --model rf --preset optuna       0.7787  0.8162    0.7413            3.31     0.9550   332s
+    --model lgbm                     0.8723  0.8977    0.8468            2.21     0.9889   229s  <- tốt nhất
+
+    Tiêu chí "✅ Tốt" §5 (val) = mAP > 0.70 VÀ sai số chỗ trống < 3 ô — cả hai cùng lúc.
+    RF+preset đạt vế đầu nhưng hỏng vế sau (3.31). lgbm là cấu hình ĐẦU TIÊN đạt đủ cả hai.
 
 ⚠️ MODEL PHẢI ĐƯỢC LƯU. Trước ngày 04/09 không có model nào tồn tại trên đĩa: mỗi lần chạy đều
    train lại từ đầu, và không có gì để UI hay bất kỳ ai khác dùng lại. Dùng --save để ghi ra
@@ -26,6 +38,7 @@ Dùng:
     python train_model.py --no-log               # không ghi vào results.csv
     python train_model.py --model rf --save ../models/rf.joblib    # RF + lưu bundle cho UI
     python train_model.py --model rf --preset optuna --sweep-threshold   # bộ tham số dò từ main
+    python train_model.py --model lgbm --save ../models/lgbm.joblib      # LightGBM (tốt nhất)
 
 ⚠️ --preset optuna: bộ tham số port từ nhánh main (merge 05/09). Optuna bên đó tối ưu **macro F1
    mức cửa sổ**, KHÔNG phải mAP_macro — nên preset là điểm khởi đầu để thử, chưa phải kết luận.
@@ -228,6 +241,51 @@ def train_random_forest(X, y, n_estimators=300, max_depth=None, min_samples_leaf
     return clf, time.perf_counter() - t0
 
 
+def train_lightgbm(X, y, n_estimators=300, num_leaves=63, learning_rate=0.10,
+                   min_child_samples=50, max_depth=-1, seed=None):
+    """LightGBM (KE_HOACH.md §7 Ngày 10-11). Model tốt nhất trên val tính đến 05/09.
+
+    Mặc định = cấu hình đã đo thắng (mAP_macro 0.8723 trên val, xem bảng đầu file). Cấu hình to
+    hơn (lr=0.05, num_leaves=127, n=600) đo được 0.8630 — THẤP HƠN dù train lâu gấp 2,6 lần.
+    Cùng bài học với RF: bài toán này cần regularize, không cần thêm capacity. Đừng tăng
+    num_leaves/n_estimators mà không đo lại mAP.
+
+    Vì sao hơn RF ở mức BOX nhiều hơn ở mức cửa sổ: AP xếp hạng box theo score, mà LightGBM tối
+    ưu thẳng multi_logloss nên xác suất mượt và xếp hạng đúng hơn phiếu bầu thô của RF. Hệ quả
+    đo được: khoảng cách giữa config cố định và điểm tốt nhất sau sweep chỉ +0.0051 (RF+preset:
+    +0.0324) — tức là gần như không cần dò ngưỡng.
+
+    class_weight='balanced': lớp nền chiếm ~80%, không có nó model bỏ hết lớp thiểu số.
+    max_depth=-1 là "không giới hạn" theo quy ước LightGBM (không phải None như sklearn) —
+    độ sâu đã bị chặn gián tiếp qua num_leaves.
+    """
+    try:
+        import lightgbm as lgb
+    except ImportError as e:
+        raise SystemExit(
+            "Cần lightgbm cho --model lgbm:  pip install 'lightgbm>=4.3'  "
+            "(đã có sẵn trong requirements.txt)") from e
+
+    clf = lgb.LGBMClassifier(
+        objective="multiclass",
+        num_class=3,
+        n_estimators=n_estimators,
+        num_leaves=num_leaves,
+        learning_rate=learning_rate,
+        min_child_samples=min_child_samples,
+        max_depth=max_depth,
+        class_weight="balanced",
+        importance_type="gain",   # 'split' (mặc định) chỉ đếm số lần chẻ -> không so được với
+                                  # feature_importances_ của RF ở §9; 'gain' mới cùng đơn vị ý nghĩa
+        n_jobs=config.N_JOBS,
+        random_state=seed if seed is not None else config.RANDOM_SEED,
+        verbose=-1,
+    )
+    t0 = time.perf_counter()
+    clf.fit(X, y)
+    return clf, time.perf_counter() - t0
+
+
 def save_model(clf, feature_cols, path, extra=None, crop_mode="rotated"):
     """Lưu một BUNDLE, không phải mỗi clf.
 
@@ -319,8 +377,9 @@ def log_result(row, path=None):
 
 def main():
     ap = argparse.ArgumentParser(description="Decision Tree (Baseline B) / Random Forest (model chính)")
-    ap.add_argument("--model", default="dt", choices=["dt", "rf"],
-                    help="dt = Baseline B (đọc được luật) | rf = model chính")
+    ap.add_argument("--model", default="dt", choices=["dt", "rf", "lgbm"],
+                    help="dt = Baseline B (đọc được luật) | rf = model chính | "
+                         "lgbm = LightGBM, tốt nhất trên val (mAP 0.8723)")
     ap.add_argument("--eval-split", default="val", choices=["val", "test"])
     ap.add_argument("--open-test-set-day-12", action="store_true",
                     help="Bắt buộc để chạy trên test. KE_HOACH.md §8 quy tắc 3: test mở 1 lần, Ngày 12.")
@@ -337,7 +396,12 @@ def main():
     ap.add_argument("--rf-class-weight", default=None, choices=["balanced_subsample", "balanced"],
                     help="chỉ dùng cho rf. Mặc định balanced_subsample. Sweep Optuna bên main "
                          "chạy với 'balanced' — cần giá trị đó để tái lập con số 0.9519.")
-    ap.add_argument("--n-estimators", type=int, default=None, help="chỉ dùng cho rf. Mặc định 300")
+    ap.add_argument("--n-estimators", type=int, default=None,
+                    help="số cây, dùng cho rf và lgbm. Mặc định 300")
+    ap.add_argument("--num-leaves", type=int, default=None,
+                    help="chỉ dùng cho lgbm. Mặc định 63 (đã đo: 127 cho kết quả THẤP hơn)")
+    ap.add_argument("--learning-rate", type=float, default=None,
+                    help="chỉ dùng cho lgbm. Mặc định 0.10")
     ap.add_argument("--sample", type=float, default=None, help="tỉ lệ dòng TRAIN giữ lại (0-1)")
     ap.add_argument("--feat-dir", default=None,
                     help="thư mục shard parquet. Mặc định config.FEAT (ô cắt xoay thẳng). "
@@ -366,6 +430,10 @@ def main():
     # mặc định cũ khi không truyền --preset, nếu không các dòng results.csv trước 05/09 sẽ không
     # tái lập được nữa.
     if a.preset:
+        if a.model not in OPTUNA_PRESETS:
+            raise SystemExit(
+                f"--preset {a.preset} chỉ có cho {sorted(OPTUNA_PRESETS)} — Optuna bên main không "
+                f"dò cho '{a.model}'. Mặc định của lgbm đã là cấu hình đo thắng, bỏ --preset đi.")
         for k, v in OPTUNA_PRESETS[a.model].items():
             if getattr(a, k) is None:
                 setattr(a, k, v)
@@ -375,13 +443,18 @@ def main():
     if a.max_depth is None:
         a.max_depth = 12 if a.model == "dt" else None
     if a.min_samples_leaf is None:
-        a.min_samples_leaf = 50 if a.model == "dt" else 5
+        # lgbm: min_child_samples=50, cùng vai trò và cùng giá trị với preset RF
+        a.min_samples_leaf = 50 if a.model in ("dt", "lgbm") else 5
     if a.min_samples_split is None:
         a.min_samples_split = 2
     if a.criterion is None:
         a.criterion = "gini"
     if a.n_estimators is None:
         a.n_estimators = 300
+    if a.num_leaves is None:
+        a.num_leaves = 63
+    if a.learning_rate is None:
+        a.learning_rate = 0.10
     if a.rf_class_weight is None:
         a.rf_class_weight = "balanced_subsample"
     bg_veto = not a.no_bg_veto
@@ -412,7 +485,16 @@ def main():
         print(f"\n  [preset={a.preset}] {OPTUNA_PRESETS[a.model]} "
               f"(tối ưu theo macro F1 mức cửa sổ — chỉ số thật vẫn là mAP_macro ở [4/4])")
 
-    if a.model == "rf":
+    if a.model == "lgbm":
+        print(f"\n[2/4] Train LightGBM ({a.n_estimators} cây, num_leaves={a.num_leaves}, "
+              f"lr={a.learning_rate})…")
+        clf, train_time = train_lightgbm(
+            X_tr, y_tr, n_estimators=a.n_estimators, num_leaves=a.num_leaves,
+            learning_rate=a.learning_rate, min_child_samples=a.min_samples_leaf,
+            max_depth=-1 if a.max_depth is None else a.max_depth)
+        print(f"  xong sau {train_time:.1f}s — {clf.booster_.num_trees()} cây thật "
+              f"({a.n_estimators} vòng x 3 lớp)")
+    elif a.model == "rf":
         print(f"\n[2/4] Train Random Forest ({a.n_estimators} cây)…")
         clf, train_time = train_random_forest(
             X_tr, y_tr, a.n_estimators, a.max_depth, a.min_samples_leaf,
@@ -428,10 +510,13 @@ def main():
             criterion=a.criterion, min_samples_split=a.min_samples_split)
         print(f"  xong sau {train_time:.1f}s — độ sâu thật {clf.get_depth()}, {clf.get_n_leaves()} lá")
 
-    if a.print_rules and a.model == "rf":
-        # RF không có luật để đọc — nhưng độ quan trọng theo nhóm vẫn kiểm chứng được KE_HOACH §9
-        by_group = pd.Series(clf.feature_importances_, index=feat_cols).groupby(
-            lambda c: c.split("_")[0]).sum().sort_values(ascending=False)
+    if a.print_rules and a.model in ("rf", "lgbm"):
+        # RF/LGBM không có luật để đọc — nhưng độ quan trọng theo nhóm vẫn kiểm chứng được §9.
+        # LGBM dùng importance_type='gain' (xem train_lightgbm) nên tỉ lệ so được với RF; đơn vị
+        # tuyệt đối thì KHÁC nhau (RF chuẩn hoá về tổng 1, LGBM trả gain thô) -> chuẩn hoá lại.
+        imp = pd.Series(clf.feature_importances_, index=feat_cols, dtype=float)
+        imp = imp / imp.sum() if imp.sum() else imp
+        by_group = imp.groupby(lambda c: c.split("_")[0]).sum().sort_values(ascending=False)
         print("\n  Tổng độ quan trọng theo NHÓM feature (§9 dự đoán color_* > hog_*):")
         print(by_group.to_string(float_format=lambda v: f"{v:.4f}"))
     elif a.print_rules:
@@ -498,7 +583,13 @@ def main():
         print(f"\n💾 Đã lưu bundle {path} ({path.stat().st_size / 1e6:.1f} MB) — nạp lại OK")
 
     if not a.no_log:
-        if a.model == "rf":
+        if a.model == "lgbm":
+            cfg = (f"LGBM n_estimators={a.n_estimators} num_leaves={a.num_leaves} "
+                   f"learning_rate={a.learning_rate} min_child_samples={a.min_samples_leaf} "
+                   f"max_depth={-1 if a.max_depth is None else a.max_depth} "
+                   f"class_weight=balanced objective=multiclass")
+            exp = "LightGBM"
+        elif a.model == "rf":
             cfg = (f"RF n_estimators={a.n_estimators} criterion={a.criterion} "
                    f"max_depth={a.max_depth} min_samples_split={a.min_samples_split} "
                    f"min_samples_leaf={a.min_samples_leaf} class_weight={a.rf_class_weight}")
