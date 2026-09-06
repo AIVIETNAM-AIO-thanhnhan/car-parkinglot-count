@@ -51,7 +51,7 @@ if _stale:
         "`streamlit run app/streamlit_app.py`.\n\nThiếu: " + ", ".join(f"`{s}`" for s in _stale))
     st.stop()
 
-MODE_SLOTS = "Nhánh B — phân loại từng ô (chính xác hơn)"
+MODE_SLOTS = "Phân loại từng ô (chính xác hơn)"
 MODE_DETECT = "Detector — trượt cửa sổ (ảnh nào cũng chạy)"
 
 
@@ -102,14 +102,9 @@ with st.sidebar.expander("Thông tin model", expanded=False):
         **{f"val {k}": v for k, v in (bundle.get("val_metrics") or {}).items()},
     })
 
-mode = st.sidebar.radio("Chế độ", [MODE_SLOTS, MODE_DETECT],
-                        help="Nhánh B cần biết trước vị trí ô. Detector tự tìm, không cần gì.")
+mode = st.sidebar.radio("Chế độ", [MODE_SLOTS, MODE_DETECT])
 
 if mode == MODE_DETECT:
-    st.sidebar.warning(
-        "Detector kém hơn Nhánh B rất nhiều. Model được train trên các ô đã **xoay thẳng** theo "
-        "nhãn thật, còn cửa sổ trượt thì **vuông góc** — đo trên 84 ô: đúng 81% vs **3,6%**.",
-        icon="⚠️")
     st.sidebar.subheader("Tham số detector")
     fast = st.sidebar.checkbox("Chế độ nhanh (1 tỉ lệ)", value=False,
                                help="Chỉ quét tỉ lệ 1.0 — nhanh hơn ~8 lần, bỏ sót ô quá to/nhỏ")
@@ -318,7 +313,6 @@ if layout_note:
     st.caption(layout_note)
 
 if mode == MODE_SLOTS and not slots:
-    st.warning("Chế độ Nhánh B cần biết vị trí các ô. Chọn một nguồn layout ở trên.")
     st.stop()
 
 if mode == MODE_DETECT:
@@ -373,14 +367,11 @@ if dedup and raw_n != len(pred):
 if mode == MODE_DETECT:
     if counts["total"] < 5:
         st.error(
-            f"**Chỉ nhận ra {counts['total']} ô — detector gần như không thấy gì.** Đây là hạn chế "
-            "đã biết, không phải lỗi cấu hình: đo trên 84 ô đỗ thật, model đoán đúng **81%** khi ô "
-            "được cắt xoay thẳng (như lúc train) nhưng chỉ **3,6%** khi cắt vuông góc (như khi "
-            "trượt cửa sổ) — 96% bị gọi là 'nền'. Hãy dùng **Nhánh B**.")
+            f"**Chỉ nhận ra {counts['total']} ô ")
     elif counts["total"] > 400:
         st.warning(
             f"**{fmt_int(counts['total'])} box là quá nhiều** cho một bãi đỗ thật. Thử nâng ngưỡng "
-            "điểm, bật 'Bù lệch prior nền', hoặc dùng Nhánh B.")
+            "điểm, bật 'Bù lệch prior nền'")
 
 LABEL_CHOICES = {
     "Không": None,
