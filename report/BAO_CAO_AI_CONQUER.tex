@@ -1,0 +1,822 @@
+\documentclass[12pt]{ai_conquer2026}
+\addbibresource{references.bib}
+
+\title{%
+  \begin{center}
+        \Large {AI VIET NAM -- AI Conquer 2026}\\[.5ex]
+        \Huge \textbf{Đếm chỗ đỗ xe từ ảnh camera bãi đỗ\\bằng học máy cổ điển}\\[.5ex]
+  \end{center}
+}
+
+% Author --------------------------------------------------------------------
+\posttitle{
+\author{
+\begin{minipage}{\textwidth}
+\centering
+{
+\vspace{-1.5em}
+Nhóm PKLot --- P1 (Tech Lead) $\cdot$ P2 (Data) $\cdot$ P3 (Pipeline) $\cdot$ P4 (Model)
+}\
+\end{minipage}
+}
+}
+\date{}
+
+% Header --------------------------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\href{https://www.facebook.com/aivietnam.edu.vn}{\textcolor{aivnGreen}{\bfseries AI VIET NAM (AI Conquer 2026)}}}
+\rhead{\href{https://aivietnam.edu.vn/}{\textcolor{aivnGreen}{\bfseries aivietnam.edu.vn}}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{1.0pt}
+\renewcommand{\headrule}{{\color{aivnGreen}\hrule width\headwidth height\headrulewidth \vskip-\headrulewidth}}
+
+\begin{document}
+\maketitle
+\vspace{-5.5em}
+\setlength{\epigraphwidth}{0.6\textwidth}
+
+\section{Tổng quan báo cáo}
+
+\textbf{Tên project:} Đếm chỗ đỗ xe từ ảnh camera bãi đỗ (\textit{Parking Lot Occupancy Counting}).
+
+\textbf{Mục tiêu:} Đưa vào một ảnh chụp bãi đỗ xe, hệ thống trả về ba con số --- \textbf{số xe}, \textbf{số chỗ trống} và \textbf{tỉ lệ lấp đầy} --- kèm khung đánh dấu từng ô đỗ. Đây là thông tin hiển thị trên bảng điện tử đầu bãi.
+
+\textbf{Vấn đề thực tế:} Người lái xe vào bãi không biết còn chỗ hay không, phải chạy vòng quanh tìm. Bãi đỗ lớn thường phải thuê nhân viên đếm thủ công hoặc lắp cảm biến siêu âm tại từng ô --- chi phí lắp đặt và bảo trì cao, hỏng một cảm biến là mất dữ liệu một ô. Trong khi đó phần lớn bãi đỗ \textbf{đã có sẵn camera giám sát}. Tận dụng camera có sẵn để đếm chỗ trống là giải pháp rẻ hơn nhiều lần.
+
+\textbf{Vì sao cần Machine Learning:} Ô đỗ có xe và ô đỗ trống \textbf{cùng hình dạng, cùng kích thước} --- đều là hình chữ nhật trên mặt đường. Không có luật hình học nào phân biệt được chúng; tín hiệu nằm ở \textbf{màu sắc và kết cấu bề mặt}. Thêm vào đó, điều kiện ánh sáng thay đổi liên tục theo giờ trong ngày và theo thời tiết (nắng, nhiều mây, mưa), bóng đổ của cây và toà nhà di chuyển suốt ngày. Một bộ ngưỡng cứng viết tay không thể bao quát các biến thể này, trong khi mô hình học từ dữ liệu thì có thể.
+
+\textbf{Người dùng mục tiêu:} Ban quản lý bãi đỗ xe (trung tâm thương mại, sân bay, khu văn phòng, trường đại học) --- những nơi đã có camera giám sát và muốn bổ sung chức năng đếm chỗ trống mà không lắp thêm phần cứng.
+
+\textbf{Dữ liệu:} PKLot~\cite{pklot} --- bộ dữ liệu công khai (CC BY 4.0) gồm 12.417 ảnh từ ba bãi đỗ ở Brazil, chụp 5 phút một lần trong nhiều tháng, đủ ba kiểu thời tiết, kèm nhãn vị trí và trạng thái của từng ô đỗ.
+
+\textbf{Phương pháp chính:} Học máy cổ điển, \textbf{không dùng mạng nơ-ron, không cần GPU}. Trượt cửa sổ đa tỉ lệ trên ảnh, trích 395 đặc trưng thủ công cho mỗi cửa sổ (HOG, LBP, màu, kết cấu), phân loại ba lớp bằng LightGBM, rồi lọc ngưỡng và gộp khung trùng bằng NMS.
+
+\textbf{Kết quả nổi bật:}
+
+\begin{itemize}
+\item Trên tập validation (bãi đã học): \textbf{mAP 0.8723}, sai số đếm chỗ trống \textbf{2,21 ô/ảnh} --- đạt cả hai vế tiêu chí ``Tốt'' của dự án.
+\item Trên tập test (bãi hoàn toàn mới): \textbf{mAP 0.6052}, vượt ngưỡng ``Tốt'' 0.50, cao hơn hẳn mức 0.35 mà kế hoạch dự đoán.
+\item Tuy nhiên sai số đếm trên bãi mới là \textbf{31,93 ô/ảnh} --- chưa đạt yêu cầu dưới 3 ô. \textbf{Hệ thống chạy tốt trên bãi đã học và chưa dùng được trên bãi mới.}
+\item Sản phẩm demo chạy được bằng Streamlit, nhận ảnh bất kỳ, xuất kết quả CSV.
+\end{itemize}
+
+Project này không dừng ở thử nghiệm mô hình: có pipeline dữ liệu đầy đủ, có bộ đo tự kiểm chứng, có mô hình được lưu kèm hợp đồng dữ liệu, có luồng suy luận và có demo tương tác.
+
+\newpage
+\setcounter{tocdepth}{2}
+\tableofcontents
+\thispagestyle{fancy}
+
+\newpage
+\section{Định nghĩa bài toán}
+
+\subsection{Bối cảnh vấn đề}
+
+Bãi đỗ xe quy mô vừa và lớn cần biết còn bao nhiêu chỗ trống theo thời gian thực để hiển thị cho tài xế và để ban quản lý điều phối. Hai giải pháp phổ biến hiện nay đều tốn kém: đếm thủ công cần nhân sự trực liên tục; cảm biến từng ô cần lắp đặt và bảo trì hàng trăm thiết bị.
+
+Hầu hết bãi đỗ đã có camera giám sát phủ toàn bộ khu vực. Nếu khai thác được luồng ảnh đó thì chi phí biên gần như bằng không --- chỉ cần thêm phần mềm.
+
+\subsection{Mục tiêu}
+
+Hệ thống thực hiện \textbf{phát hiện đối tượng} (object detection): định vị từng ô đỗ trong ảnh và phân loại trạng thái của nó. Đây không phải bài toán phân loại ảnh đơn thuần, vì một ảnh chứa hàng trăm ô đỗ và cần biết vị trí của từng ô, không chỉ một nhãn cho cả ảnh.
+
+\subsection{Đầu vào của hệ thống}
+
+\begin{itemize}
+\item \textbf{Bắt buộc:} Một ảnh màu chụp bãi đỗ, độ phân giải 1280$\times$720, định dạng JPEG.
+\item \textbf{Tuỳ chọn:} Sơ đồ vị trí các ô đỗ (file XML theo chuẩn PKLot, CSV hoặc JSON). Có sơ đồ thì độ chính xác cao hơn hẳn --- xem mục~\ref{sec:kientruc}.
+\item \textbf{Không cần:} GPU, kết nối mạng khi chạy, hay bất kỳ phần cứng chuyên dụng nào.
+\end{itemize}
+
+\subsection{Đầu ra mong muốn}
+
+\begin{itemize}
+\item \textbf{Mức chi tiết:} Với mỗi ô đỗ --- toạ độ khung bao \texttt{(x\_min, y\_min, x\_max, y\_max)}, nhãn \texttt{ô trống} hoặc \texttt{có xe}, và điểm tin cậy trong khoảng $[0,1]$.
+\item \textbf{Mức tổng hợp:} Ba con số --- số xe, số chỗ trống, tỉ lệ lấp đầy (\%).
+\item \textbf{Phụ trợ:} Ảnh đã vẽ khung màu (xanh = trống, đỏ = có xe) và file CSV tải về.
+\end{itemize}
+
+\subsection{Loại bài toán AI}
+
+\textbf{Object detection} ba lớp trên ảnh tĩnh, giải bằng phương pháp \textit{sliding window + classifier}. Ba lớp:
+
+\begin{center}
+\begin{tabular}{|c|l|l|}
+\hline
+\textbf{Nhãn} & \textbf{Tên} & \textbf{Ý nghĩa} \\
+\hline
+0 & ô trống & Ô đỗ có vạch kẻ, không có xe \\
+1 & có xe & Ô đỗ có xe đang đậu \\
+2 & nền & Không phải ô đỗ (lối đi, vỉa hè, cây cối, mái nhà) \\
+$-1$ & không rõ & Có vị trí ô nhưng nhãn gốc thiếu trạng thái \\
+\hline
+\end{tabular}
+\end{center}
+
+Lớp \texttt{nền} chỉ tồn tại để mô hình biết \textit{loại bỏ} phần ảnh không liên quan; nó không bao giờ xuất hiện trong đầu ra.
+
+\subsection{Tiêu chí thành công}
+
+Chỉ số chính là \textbf{mAP\_macro} (\textit{mean Average Precision} --- trung bình không trọng số của AP hai lớp \texttt{ô trống} và \texttt{có xe}), đo trên khung bao cuối cùng sau khi đã lọc ngưỡng và gộp NMS. Chỉ số phụ là \textbf{free\_slots\_MAE} (\textit{Mean Absolute Error} --- sai số tuyệt đối trung bình của số chỗ trống đếm được, đơn vị: ô/ảnh).
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Mức} & \textbf{Trên validation} & \textbf{Trên test} \\
+\hline
+Sàn bắt buộc vượt & mAP $>$ 0.5176 (Baseline A) & --- \\
+\hline
+Tối thiểu & mAP $>$ 0.60 & mAP $>$ 0.35 \\
+\hline
+Tốt & mAP $>$ 0.70 \textbf{và} sai số $<$ 3 ô & mAP $>$ 0.50 \textbf{và} sai số $<$ 3 ô \\
+\hline
+\end{tabular}
+\end{center}
+
+Ngưỡng trên test thấp hơn vì tập test là bãi đỗ hoàn toàn khác --- nhóm đã lường trước hiện tượng \textit{domain shift} ngay từ khi lập kế hoạch.
+
+Ngoài chỉ số mô hình, hệ thống còn phải: chạy được luồng suy luận đầu-cuối trên ảnh mới, có demo tương tác, và mọi kết quả phải tái lập được.
+
+\begin{aivncodebox}[Tóm tắt bài toán]
+Đầu vào là một ảnh bãi đỗ. Đầu ra là danh sách khung bao kèm nhãn ``ô trống'' hoặc ``có xe'' và điểm tin cậy, từ đó tổng hợp thành số xe, số chỗ trống và tỉ lệ lấp đầy. Bài toán được đánh giá bằng mAP ở mức khung bao và sai số tuyệt đối ở mức đếm.
+\end{aivncodebox}
+
+\newpage
+\section{Dữ liệu sử dụng}
+
+\subsection{Nguồn dữ liệu}
+
+Bộ dữ liệu công khai \textbf{PKLot}~\cite{pklot}, tải tự do tại \url{http://web.inf.ufpr.br/vri/databases/parking-lot-database}, giấy phép CC BY 4.0. Đây là bộ dữ liệu chuẩn cho bài toán này, có công trình đã công bố để đối chiếu.
+
+\subsection{Kích thước và định dạng}
+
+\begin{center}
+\begin{tabular}{|l|r|l|}
+\hline
+\textbf{Hạng mục} & \textbf{Số lượng} & \textbf{Định dạng} \\
+\hline
+Ảnh gốc & 12.417 & JPEG, 1280$\times$720 \\
+Ảnh sau lấy mẫu thời gian & 579 & JPEG \\
+File nhãn & 12.417 & XML (một file mỗi ảnh) \\
+Bãi đỗ & 3 & UFPR04, UFPR05, PUCPR \\
+Thời tiết & 3 & Sunny, Cloudy, Rainy \\
+Ô đỗ đã gán nhãn & 34.686 dòng & CSV dẫn xuất \\
+Cửa sổ trượt đã trích đặc trưng & 1.180.200 & Parquet, 8 shard \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Cấu trúc dữ liệu}
+
+Mỗi file XML mô tả một ảnh, chứa danh sách ô đỗ. Mỗi ô có: định danh, thuộc tính \texttt{occupied} (0 hoặc 1), toạ độ hình chữ nhật \textbf{xoay} (tâm, rộng, cao, góc nghiêng) và bốn đỉnh. Hình chữ nhật xoay là chi tiết quan trọng: ô đỗ nhìn từ camera đặt cao luôn bị nghiêng, không song song với trục ảnh.
+
+Sau xử lý, dữ liệu được chuẩn hoá thành hai bảng:
+
+\begin{itemize}
+\item \texttt{processed/gt.csv} --- 34.686 dòng, mỗi dòng một ô đỗ thật: \texttt{image\_id}, khung bao vuông góc, nhãn, và các trường \texttt{rot\_*} mô tả hình chữ nhật xoay.
+\item \texttt{features/shard\_*.parquet} --- 1.180.200 dòng $\times$ 403 cột: 8 cột mô tả (định danh ảnh, bãi, tập, lớp, khung bao) và \textbf{395 cột đặc trưng}.
+\end{itemize}
+
+\subsection{Chia dữ liệu}
+
+Dữ liệu được chia \textbf{theo bãi đỗ} và khoá vĩnh viễn từ ngày 23/08.
+
+\begin{center}
+\begin{tabular}{|l|l|r|l|}
+\hline
+\textbf{Tập} & \textbf{Bãi đỗ} & \textbf{Ảnh} & \textbf{Vai trò} \\
+\hline
+train & UFPR04 (148 ngày) + UFPR05 (192 ngày) & 340 & Huấn luyện \\
+val & UFPR04, \textbf{cùng bãi}, khác ngày & 29 & Tinh chỉnh nhanh \\
+test & PUCPR, \textbf{bãi hoàn toàn khác} & 210 & Phép đo thật \\
+\hline
+\end{tabular}
+\end{center}
+
+Việc để val cùng bãi với train là \textbf{ngoại lệ có chủ ý}: val dùng để tinh chỉnh nhanh nên chấp nhận lạc quan, đổi lại nó phải vượt một cái sàn rất cao. Chỉ tập test mới là phép đo thật. Hệ quả của lựa chọn này được phân tích kỹ ở mục~\ref{sec:hanche}.
+
+\subsection{Các vấn đề của dữ liệu và cách xử lý}
+
+\begin{center}
+\begin{tabular}{|p{4.2cm}|p{9.5cm}|}
+\hline
+\textbf{Vấn đề} & \textbf{Cách xử lý} \\
+\hline
+\textbf{Nhãn không đầy đủ.} Bãi PUCPR chỉ gán nhãn khoảng 100 trên 300 ô nhìn thấy được & Cắt ảnh về đúng vùng có nhãn, nhờ đó nhãn trở nên đầy đủ trong vùng còn lại. Phần rìa chưa gán nhãn được đánh dấu là vùng \textit{ignore} \\
+\hline
+\textbf{Ảnh gần trùng nhau.} Chụp 5 phút một lần, camera cố định, xe đậu hàng giờ & Lấy mẫu thời gian: giữ 1 ảnh mỗi 2 giờ, giảm từ 156 xuống 7 ảnh mỗi ngày \\
+\hline
+\textbf{Méo phối cảnh.} Ô gần camera to gấp 3,4 lần ô ở xa (tỉ lệ p90/p10 diện tích) & Trượt cửa sổ đa tỉ lệ với 5 mức: 0.5, 0.75, 1.0, 1.5, 2.0 \\
+\hline
+\textbf{Hai lớp cùng hình dạng.} Ô có xe và ô trống đều là chữ nhật cùng cỡ & Đặc trưng tập trung vào màu sắc và kết cấu, không dựa vào hình dạng \\
+\hline
+\textbf{Mất cân bằng lớp nặng.} Lớp nền chiếm khoảng 80\% số cửa sổ & Chỉ giữ 10\% cửa sổ nền khi trích đặc trưng, và bật \texttt{class\_weight='balanced'} khi huấn luyện \\
+\hline
+\textbf{Camera bị xê dịch.} Camera UFPR04 bị dịch vị trí 2 lần giữa kỳ thu thập & Phát hiện và chia dữ liệu theo từng kỳ camera; nếu bỏ qua thì Baseline A cho điểm cao giả tạo \\
+\hline
+\end{tabular}
+\end{center}
+
+Việc phát hiện camera xê dịch là một bài học đắt: trước khi sửa, sàn Baseline A đo được 0.1529; sau khi sửa là 0.5176 --- gấp hơn ba lần. Nếu không phát hiện, mọi mô hình sau đó đều được so với một cái sàn sai.
+
+\newpage
+\section{Tiền xử lý và chuẩn bị dữ liệu}
+
+\subsection{Các bước xử lý}
+
+\begin{enumerate}
+\item \textbf{Đọc nhãn XML} $\rightarrow$ trích toạ độ hình chữ nhật xoay và trạng thái từng ô, ghi ra \texttt{gt.csv}.
+
+\item \textbf{Cắt ảnh về vùng có nhãn.} Mỗi bãi có một khung cắt cố định, tính từ bao lồi của toàn bộ ô đã gán nhãn, cộng lề 6\%. Kết quả: PUCPR 1218$\times$529, UFPR04 1005$\times$721, UFPR05 1100$\times$713.
+
+\item \textbf{Lấy mẫu thời gian.} Giữ 1 ảnh mỗi 120 phút. Đây là bước \textbf{chống rò rỉ dữ liệu} quan trọng nhất: hai ảnh cách nhau 5 phút gần như giống hệt, nếu một vào train một vào val thì mô hình chỉ cần ghi nhớ chứ không cần học.
+
+\item \textbf{Chia tập theo bãi đỗ} và khoá vĩnh viễn.
+
+\item \textbf{Trượt cửa sổ.} Kích thước cơ sở 96 pixel (bằng trung vị cạnh dài của ô đỗ, đo thật là 97 pixel), bước nhảy 16 pixel, 5 tỉ lệ. Cho ra khoảng 16.000--20.000 cửa sổ mỗi ảnh.
+
+\item \textbf{Gán nhãn cửa sổ.} Cửa sổ trùng với ô đỗ thật ở mức IoU $\geq$ 0.5 nhận nhãn của ô đó; IoU trong khoảng 0.3--0.5 bị đánh dấu \textit{ignore} và \textbf{loại khỏi tập huấn luyện} (vùng lửng lơ này gây nhiễu); IoU $<$ 0.3 là nền.
+
+\item \textbf{Lấy mẫu lớp nền.} Chỉ giữ ngẫu nhiên 10\% cửa sổ nền. Không có bước này thì dữ liệu phình lên gấp 8 lần mà chỉ thêm mẫu dễ.
+
+\item \textbf{Trích đặc trưng.} Mỗi cửa sổ được đưa về 96$\times$96 rồi trích vector 395 chiều.
+\end{enumerate}
+
+\subsection{Bộ 395 đặc trưng}
+
+\begin{center}
+\begin{tabular}{|l|r|p{7.5cm}|}
+\hline
+\textbf{Nhóm} & \textbf{Số chiều} & \textbf{Vai trò} \\
+\hline
+HOG & 324 & Biểu đồ hướng gradient --- bắt đường viền và hình dạng xe \\
+LBP & 10 & Local Binary Patterns --- kết cấu cục bộ, phân biệt mặt nhựa đường với thân xe \\
+Màu & 54 & Biểu đồ màu ba kênh --- tín hiệu chính, vì xe có màu còn mặt đường thì không \\
+Kết cấu & 7 & Thống kê kết cấu tổng hợp \\
+\hline
+\textbf{Tổng} & \textbf{395} & \\
+\hline
+\end{tabular}
+\end{center}
+
+Thứ tự các nhóm được \textbf{khoá và kiểm tra tự động}. Trong quá trình phát triển đã từng xảy ra lỗi hoán vị hai khối \texttt{color} và \texttt{lbp}: tổng số chiều vẫn đúng 395 nên không có lỗi nào được báo, nhưng mô hình nhận đặc trưng bị đảo vị trí và dự đoán trở nên vô nghĩa. Từ đó hàm \texttt{features.self\_test()} đối chiếu trực tiếp thứ tự cột với schema parquet mỗi lần chạy.
+
+\subsection{Đầu ra sau tiền xử lý}
+
+8 file Parquet, tổng 1,9 GB, mỗi dòng là một cửa sổ với 8 cột mô tả và 395 cột đặc trưng kiểu \texttt{float32}. Toàn bộ quá trình mất khoảng 36 phút và chỉ chạy một lần, kết quả được lưu lại dùng nhiều lần.
+
+\subsection{Chống rò rỉ dữ liệu}
+
+Đây là phần được đầu tư nhiều nhất, vì bài toán này có nhiều đường rò rỉ tinh vi:
+
+\begin{itemize}
+\item \textbf{Chia theo bãi đỗ, không chia ngẫu nhiên.} Camera cố định nên chia ngẫu nhiên trong cùng bãi khiến mô hình chỉ cần ghi nhớ vị trí ô.
+\item \textbf{Lấy mẫu thời gian} để loại ảnh gần trùng.
+\item \textbf{Tách theo kỳ camera} sau khi phát hiện UFPR04 bị xê dịch.
+\item \textbf{Cổng kiểm tra bằng Baseline A.} Một mô hình không nhìn ảnh, chỉ ghi nhớ vị trí ô từ train rồi lặp lại. Nếu chia dữ liệu sai, nó đạt mAP 0.76. Thực tế nó đạt \textbf{0.0000 trên test}, chứng minh cách chia là hợp lệ.
+\item \textbf{Tập test chỉ được mở một lần}, có cờ dòng lệnh bắt buộc để tránh mở nhầm.
+\end{itemize}
+
+\newpage
+\section{Phương pháp và mô hình sử dụng}
+
+\subsection{Baseline}
+
+\textbf{Baseline A --- ``Đoán theo vị trí''.} Không nhìn ảnh, chỉ ghi nhớ vị trí các ô từ tập train rồi lặp lại y nguyên cho ảnh mới. Đây \textbf{không phải mô hình để dùng} mà là cổng kiểm tra tính hợp lệ của cách chia dữ liệu. Kết quả: mAP 0.5176 trên val, \textbf{0.0000 trên test}.
+
+\textbf{Baseline B --- Decision Tree.} Mô hình đơn giản nhất, đọc được luật ra để kiểm tra xem mô hình có học đúng thứ mình nghĩ không. Kết quả: mAP 0.2769 trên val.
+
+\subsection{Mô hình chính và lý do lựa chọn}
+
+Nhóm chọn hướng \textbf{học máy cổ điển} thay vì mạng nơ-ron vì bốn lý do:
+
+\begin{itemize}
+\item \textbf{Ràng buộc phần cứng:} yêu cầu chạy được trên Colab Free, không GPU.
+\item \textbf{Phù hợp dữ liệu:} 395 đặc trưng thủ công là dữ liệu dạng bảng, mà cây quyết định tăng cường là lựa chọn mạnh nhất cho dữ liệu bảng.
+\item \textbf{Giải thích được:} có thể biết nhóm đặc trưng nào quan trọng, đối chiếu với giả thuyết ban đầu.
+\item \textbf{Triển khai thực tế:} mô hình cuối chỉ 3 MB, suy luận không cần thư viện nặng.
+\end{itemize}
+
+Ba mô hình đã thử theo thứ tự:
+
+\begin{center}
+\begin{tabular}{|l|p{9.5cm}|}
+\hline
+\textbf{Mô hình} & \textbf{Cấu hình} \\
+\hline
+Decision Tree & \texttt{max\_depth=12}, \texttt{min\_samples\_leaf=50}, \texttt{class\_weight='balanced'} \\
+\hline
+Random Forest & \texttt{n\_estimators=200}, \texttt{max\_depth=26}, \texttt{min\_samples\_split=200}, \texttt{min\_samples\_leaf=50}, \texttt{class\_weight='balanced'} --- tìm bằng Optuna \\
+\hline
+\textbf{LightGBM} & \texttt{n\_estimators=300}, \texttt{num\_leaves=63}, \texttt{learning\_rate=0.10}, \texttt{min\_child\_samples=50}, \texttt{class\_weight='balanced'}, \texttt{objective='multiclass'} \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Vì sao LightGBM thắng.} Ngoài việc phân loại chính xác hơn ở mức cửa sổ (macro F1 0.9889 so với 0.9550), LightGBM cho \textbf{xác suất được hiệu chỉnh tốt hơn}. Điều này quan trọng vì AP xếp hạng các khung bao theo điểm tin cậy: Random Forest cho xác suất là tỉ lệ bỏ phiếu của 200 cây --- rất thô, còn LightGBM tối ưu trực tiếp hàm \texttt{multi\_logloss} nên điểm số mượt và xếp hạng đúng hơn. Hệ quả đo được: khoảng cách giữa cấu hình mặc định và cấu hình tốt nhất sau khi quét ngưỡng chỉ là $+0.0051$ với LightGBM, so với $+0.0324$ với Random Forest --- tức là LightGBM gần như không cần dò ngưỡng.
+
+\subsection{Tối ưu siêu tham số bằng Optuna}
+
+Dùng \texttt{TPESampler} với 10 lượt thử cho mỗi mô hình, hàm mục tiêu là macro F1 trên tập validation. Bộ tham số tốt nhất cải thiện Random Forest từ mAP 0.6042 lên \textbf{0.7787} ($+0.1745$), đồng thời \textbf{giảm 45\% thời gian huấn luyện}.
+
+Lý do mô hình mặc định thua: \texttt{max\_depth=None} kết hợp \texttt{min\_samples\_leaf=5} cho cây sâu trung bình 84 tầng và \textbf{độ chính xác trên train đạt 1.0000} --- thuộc lòng dữ liệu. Bộ Optuna chặn độ sâu ở 26 và số mẫu tối thiểu ở lá là 50 nên tổng quát tốt hơn hẳn.
+
+\textbf{Lưu ý về chỉ số:} Optuna tối ưu macro F1 ở \textit{mức cửa sổ}, không phải mAP ở \textit{mức khung bao}. Hai chỉ số này không so sánh được với nhau --- giá trị 0.9519 của lượt thử tốt nhất thực ra tương ứng với mAP 0.7787. Macro F1 chỉ dùng làm chỉ số thay thế rẻ tiền để \textit{xếp hạng ứng viên}, kết quả cuối vẫn phải đo bằng mAP.
+
+\subsection{Hard negative mining}
+
+Ý tưởng: cho mô hình chạy trên chính ảnh train, thu các cửa sổ nền bị đoán nhầm thành ô đỗ, thêm chúng vào tập huấn luyện rồi huấn luyện lại.
+
+Điểm mấu chốt trong cách triển khai: đào từ \textbf{90\% cửa sổ nền đã bị loại} khi trích đặc trưng --- khoảng 6 triệu cửa sổ mô hình chưa từng thấy --- chứ không phải lặp lại mẫu đã có trong tập huấn luyện.
+
+\begin{center}
+\begin{tabular}{|c|r|r|r|r|}
+\hline
+\textbf{Vòng} & \textbf{Mẫu đào được} & \textbf{Tỉ lệ báo nhầm} & \textbf{mAP val} & \textbf{Sai số đếm} \\
+\hline
+0 & --- & --- & 0.7787 & 3,31 \\
+1 & 2.472 & 0,69\% & 0.7868 & 3,14 \\
+2 & 2.183 & 0,61\% & \textbf{0.7947} & \textbf{2,69} \\
+3 & 1.714 & 0,48\% & 0.7886 & 2,97 \\
+\hline
+\end{tabular}
+\end{center}
+
+Tỉ lệ báo nhầm giảm đơn điệu qua các vòng --- mô hình thật sự học được cách từ chối nền. Đỉnh ở vòng 2; vòng 3 thoái lui nên nhóm dừng ở 2 dù kế hoạch ghi 3.
+
+\textbf{Tuy nhiên, đo trên tập test cho thấy mining làm hại} --- xem mục~\ref{sec:thucnghiem}. Đây là kết quả quan trọng nhất của phần thực nghiệm.
+
+\subsection{Các phương án đã thử và thất bại}
+
+\textbf{Huấn luyện lại trên ô cắt vuông góc.} Nhằm chữa lỗi lệch giữa huấn luyện và suy luận (mục~\ref{sec:hanche}, H3). Kết quả: mAP val \textbf{0.8305} --- đứng thứ hai, rất hứa hẹn. Nhưng trên test chỉ đạt \textbf{0.1476} --- đứng cuối, sụp $-0.6829$. Đây là cú sụp lớn nhất trong toàn bộ dự án.
+
+\newpage
+\section{Kiến trúc hệ thống}
+\label{sec:kientruc}
+
+\subsection{Các thành phần}
+
+\begin{center}
+\begin{tabular}{|l|l|p{7cm}|}
+\hline
+\textbf{Thành phần} & \textbf{Module} & \textbf{Nhiệm vụ} \\
+\hline
+Giao diện demo & \texttt{app/streamlit\_app.py} & Nhận ảnh tải lên, chọn chế độ, hiển thị kết quả \\
+\hline
+Kiểm tra đầu vào & \texttt{infer.load\_image} & Kiểm định dạng, kích thước; cảnh báo nếu ảnh quá lớn \\
+\hline
+Tiền xử lý & \texttt{windows.py}, \texttt{features.py} & Sinh cửa sổ, trích 395 đặc trưng \\
+\hline
+Nạp mô hình & \texttt{train\_model.load\_model} & Nạp bundle và \textbf{kiểm tra hợp đồng} thứ tự cột, bảng nhãn \\
+\hline
+Suy luận & \texttt{infer.py} & Chạy mô hình, cho ra xác suất ba lớp \\
+\hline
+Hậu xử lý & \texttt{detect.py} & Lọc ngưỡng, phủ quyết lớp nền, gộp NMS \\
+\hline
+Tổng hợp & \texttt{infer.count\_from\_predictions} & Đếm ra ba con số \\
+\hline
+Hiển thị & \texttt{infer.draw\_boxes} & Vẽ khung màu, xuất CSV \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Ba chế độ chạy}
+
+Hệ thống có ba đường xử lý, khác nhau về bản chất và độ chính xác:
+
+\begin{center}
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Chế độ} & \textbf{Hàm} & \textbf{Đầu vào} & \textbf{Đầu ra} \\
+\hline
+Nhánh B & \texttt{classify\_slots} & 1 ảnh + sơ đồ ô & Trạng thái từng ô \\
+\hline
+Detector & \texttt{detect\_image} & 1 ảnh & Khung bao rời rạc \\
+\hline
+Tự dò sơ đồ & \texttt{auto\_layout} & Nhiều ảnh cùng camera & Sơ đồ ô đỗ dùng lại được \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Nhánh B} là chế độ cho kết quả đáng tin nhất: vị trí ô đã biết nên không cần ngưỡng, không cần NMS, không phải phân biệt lớp nền, và ô được cắt theo hình chữ nhật xoay đúng như lúc huấn luyện.
+
+\textbf{Detector} đúng đề bài gốc (không cần biết gì về bãi) nhưng kém chính xác hơn nhiều vì lỗi lệch huấn luyện/suy luận (mục~\ref{sec:hanche}, H3).
+
+\textbf{Tự dò sơ đồ} là cầu nối giữa hai chế độ trên: chạy detector trên nhiều ảnh của cùng một camera rồi chỉ giữ những vị trí xuất hiện lặp lại ở ít nhất 40\% số ảnh. Nguyên lý: camera cố định nhưng xe thì đổi chỗ liên tục, nên ô bị xe che ở ảnh này sẽ lộ ra ở ảnh khác; còn báo nhầm ngẫu nhiên hiếm khi rơi trúng cùng một chỗ ở nhiều ảnh. Dò xong sơ đồ một lần thì dùng Nhánh B mãi về sau.
+
+\newpage
+\section{Luồng huấn luyện và suy luận}
+
+\subsection{Luồng huấn luyện}
+
+\begin{enumerate}
+\item Tải PKLot (khoảng 2 GB) về thư mục \texttt{raw/}.
+\item Đọc nhãn XML, tính khung cắt cho từng bãi, lấy mẫu thời gian, chia tập theo bãi đỗ rồi \textbf{khoá vĩnh viễn}.
+\item Chạy \textbf{cổng kiểm tra}: nộp chính nhãn thật vào bộ đo, phải cho mAP $= 1.0$. Không PASS thì cả nhóm dừng, không ai được huấn luyện.
+\item Chạy \textbf{Baseline A} để kiểm tra cách chia dữ liệu. Điểm trên test phải xấp xỉ 0.
+\item Trượt cửa sổ, gán nhãn, lấy mẫu lớp nền, trích 395 đặc trưng $\rightarrow$ 8 file Parquet.
+\item Huấn luyện Baseline B (Decision Tree) để có điểm xuất phát.
+\item Huấn luyện Random Forest, tối ưu siêu tham số bằng Optuna.
+\item Chạy hard negative mining nhiều vòng, đo mAP sau mỗi vòng.
+\item Huấn luyện LightGBM.
+\item Đánh giá tất cả trên validation, \textbf{chọn mô hình tốt nhất}.
+\item \textbf{Mở tập test đúng một lần} với mô hình đã chọn trước.
+\item Lưu bundle \texttt{.joblib} kèm hợp đồng dữ liệu để demo dùng lại.
+\end{enumerate}
+
+\textbf{Về việc lưu mô hình.} Bundle không chỉ chứa mô hình mà còn chứa \textbf{thứ tự 395 cột đặc trưng} và \textbf{bảng nhãn}, cùng các hằng số hậu xử lý. Lý do: một vector 395 số không tự nói cột nào là cột nào, và \texttt{classes\_ = [0,1,2]} không tự nói 0 nghĩa là gì. Cả hai thứ này đều đã từng sai âm thầm trong dự án. Hàm \texttt{load\_model()} \textbf{từ chối} mọi mô hình không khớp hợp đồng --- thà gãy ngay lúc nạp còn hơn để hệ thống âm thầm xuất vùng nền ra thành ``ô trống''.
+
+\subsection{Luồng suy luận}
+
+\begin{enumerate}
+\item Người dùng tải ảnh lên giao diện Streamlit.
+\item Hệ thống kiểm tra định dạng và kích thước ảnh; nếu ảnh lớn thì cảnh báo trước thời gian xử lý dự kiến.
+\item Người dùng chọn chế độ: Nhánh B (nếu có sơ đồ ô) hoặc Detector.
+\item Sinh cửa sổ trượt hoặc lấy trực tiếp danh sách ô từ sơ đồ.
+\item Trích 395 đặc trưng cho mỗi vùng, xử lý song song theo lô.
+\item Mô hình cho ra xác suất ba lớp.
+\item Hậu xử lý: lọc theo ngưỡng 0.50, phủ quyết lớp nền, gộp NMS ở mức IoU 0.20 --- \textbf{riêng từng ảnh và riêng từng lớp}.
+\item Đếm ra ba con số, vẽ khung màu lên ảnh.
+\item Hiển thị kết quả kèm nút tải CSV. Nếu tỉ lệ cửa sổ bị gán ``nền'' quá cao, hệ thống \textbf{cảnh báo} người dùng rằng kết quả không đáng tin và gợi ý chuyển sang Nhánh B.
+\end{enumerate}
+
+\begin{aivncodebox}[Ví dụ luồng suy luận thực tế]
+Người dùng tải lên một ảnh bãi đỗ 1280$\times$720 và chọn chế độ Nhánh B kèm file XML sơ đồ. Hệ thống đọc được 100 ô, cắt từng ô theo hình chữ nhật xoay, đưa về 96$\times$96, trích 395 đặc trưng, chạy LightGBM, lấy nhãn có xác suất cao hơn giữa hai lớp ``ô trống'' và ``có xe'', rồi hiển thị: 58 xe, 42 chỗ trống, tỉ lệ lấp đầy 58\%.
+\end{aivncodebox}
+
+\newpage
+\section{Công cụ và công nghệ sử dụng}
+
+\begin{center}
+\begin{tabular}{|l|l|p{6.8cm}|}
+\hline
+\textbf{Công nghệ} & \textbf{Dùng ở đâu} & \textbf{Vì sao chọn} \\
+\hline
+Python 3.9+ & Toàn bộ & Hệ sinh thái ML đầy đủ nhất \\
+\hline
+NumPy & Toàn bộ & Tính toán vector, nền của mọi thư viện khác \\
+\hline
+Pandas & Xử lý bảng, ghi kết quả & Thao tác dữ liệu bảng thuận tiện \\
+\hline
+OpenCV & Đọc ảnh, cắt hình chữ nhật xoay & Có sẵn hàm \texttt{warpAffine} để cắt vùng xoay \\
+\hline
+scikit-image & Trích HOG, LBP & Cài đặt chuẩn, đã tối ưu \\
+\hline
+Mahotas & Đặc trưng kết cấu & Nhanh hơn scikit-image cho nhóm này \\
+\hline
+scikit-learn & Decision Tree, Random Forest, các chỉ số & API thống nhất, ổn định \\
+\hline
+LightGBM & \textbf{Mô hình cuối} & Mạnh nhất cho dữ liệu bảng, huấn luyện nhanh, xác suất hiệu chỉnh tốt \\
+\hline
+Optuna & Tối ưu siêu tham số & Thuật toán TPE hiệu quả hơn tìm kiếm lưới \\
+\hline
+PyArrow & Đọc ghi Parquet & Lưu 1,18 triệu dòng $\times$ 395 cột hiệu quả \\
+\hline
+joblib & Lưu mô hình, xử lý song song & Chuẩn của scikit-learn \\
+\hline
+Streamlit & Giao diện demo & Dựng giao diện nhanh, tích hợp thẳng với pipeline Python \\
+\hline
+Pillow & Vẽ khung, xuất ảnh & Nhẹ, đủ dùng cho việc vẽ \\
+\hline
+Git / GitHub & Quản lý mã nguồn & Làm việc nhóm 4 người \\
+\hline
+Google Colab & Môi trường huấn luyện & Miễn phí, đủ RAM cho 1,9 GB đặc trưng \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Hạn chế cần lưu ý khi dùng:}
+
+\begin{itemize}
+\item \textbf{LightGBM} mặc định dùng \texttt{importance\_type='split'} (đếm số lần chẻ nhánh); muốn so sánh độ quan trọng đặc trưng với Random Forest thì phải đổi sang \texttt{'gain'}.
+\item \textbf{LightGBM} quy ước \texttt{max\_depth=-1} nghĩa là không giới hạn, khác với scikit-learn dùng \texttt{None} --- dễ gây lỗi khi viết mã dùng chung.
+\item \textbf{Streamlit} chạy lại toàn bộ script mỗi lần người dùng tương tác; phải dùng \texttt{@st.cache\_resource} cho việc nạp mô hình, nếu không mỗi thao tác đều nạp lại file 3--180 MB.
+\item \textbf{Windows} cần đặt \texttt{PYTHONIOENCODING=utf-8} trước khi chạy, nếu không các ký tự tiếng Việt trong log sẽ gây lỗi.
+\end{itemize}
+
+\newpage
+\section{Cấu trúc mã nguồn và hướng dẫn chạy}
+
+\begin{aivnoutputbox}[Cấu trúc thư mục]
+car-parkinglot-count/
+|-- raw/                          -- PKLot goc (khong commit, ~2 GB)
+|-- processed/
+|   |-- gt.csv                    -- 34.686 o do that
+|   |-- splits.json               -- chia tap, da khoa
+|   |-- crops.json                -- khung cat moi bai
+|
+|-- features/                     -- 8 shard parquet (khong commit, 1,9 GB)
+|-- features_axis/                -- bien the cat vuong goc
+|-- mined/                        -- mau hard negative dao duoc
+|
+|-- src/
+|   |-- config.py                 -- hang so dung chung, DA KHOA
+|   |-- pklot_data.py             -- doc XML, chia tap, lay mau thoi gian
+|   |-- build_dataset.py          -- trich dac trung -> parquet
+|   |-- windows.py                -- truot cua so, gan nhan
+|   |-- features.py               -- 395 dac trung
+|   |-- train_model.py            -- DT / RF / LightGBM + luu bundle
+|   |-- mine_hard_negatives.py    -- hard negative mining
+|   |-- detect.py                 -- nguong + NMS -> khung bao
+|   |-- evaluate.py               -- ham Average Precision
+|   |-- evaluate_pklot.py         -- bo do 3 tang
+|   |-- baselines.py              -- Baseline A
+|   |-- infer.py                  -- luong suy luan cho anh that
+|
+|-- models/                       -- bundle .joblib (khong commit)
+|-- app/streamlit_app.py          -- giao dien demo
+|-- notebooks/                    -- kham pha du lieu, thu nghiem
+|-- report/                       -- bao cao va hinh anh
+|-- results.csv                   -- nhat ky moi thi nghiem
+|-- requirements.txt
+|-- README.md
+\end{aivnoutputbox}
+
+\subsection{Hướng dẫn chạy}
+
+\begin{aivncodebox}[{Cài đặt và huấn luyện lại từ đầu (khoảng 90 phút)}]
+\begin{python}
+git clone https://github.com/AIVIETNAM-AIO-thanhnhan/car-parkinglot-count.git
+cd car-parkinglot-count
+pip install -r requirements.txt
+
+bash scripts/download_data.sh raw          # tai PKLot   (15-40 phut)
+cd src
+python pklot_data.py                       # doc nhan, chia tap (2 phut)
+python build_dataset.py                    # trich dac trung (~36 phut)
+python train_model.py --model lgbm \
+       --save ../models/lgbm.joblib        # huan luyen  (~4 phut)
+\end{python}
+\end{aivncodebox}
+
+\begin{aivncodebox}[Chạy demo]
+\begin{python}
+streamlit run app/streamlit_app.py
+\end{python}
+\end{aivncodebox}
+
+\begin{aivncodebox}[Các lệnh thí nghiệm khác]
+\begin{python}
+# Baseline B, in luat cua cay ra doc
+python train_model.py --model dt --print-rules 3
+
+# Random Forest voi bo tham so Optuna, kem quet nguong
+python train_model.py --model rf --preset optuna --sweep-threshold
+
+# Hard negative mining 2 vong
+python mine_hard_negatives.py --rounds 2
+
+# Danh gia tren tap test (can co truyen dat co)
+python train_model.py --model lgbm --eval-split test \
+       --open-test-set-day-12
+\end{python}
+\end{aivncodebox}
+
+Nếu không muốn huấn luyện lại, chỉ cần tải bundle \texttt{.joblib} từ link ở phần Phụ lục, đặt vào thư mục \texttt{models/} rồi chạy demo.
+
+\newpage
+\section{Thực nghiệm và đánh giá mô hình}
+\label{sec:thucnghiem}
+
+\subsection{Dữ liệu và chỉ số đánh giá}
+
+Tập test gồm \textbf{210 ảnh bãi PUCPR}, 22.050 ô đỗ (10.893 trống, 8.720 có xe, 2.437 không rõ nhãn). Bãi này \textbf{chưa từng xuất hiện} trong huấn luyện. Các ô nhãn ``không rõ'' được xử lý làm vùng \textit{ignore} --- dự đoán rơi vào đó không tính đúng cũng không tính sai, theo chuẩn COCO.
+
+Chỉ số dùng: \textbf{mAP\_macro} và \textbf{AP} từng lớp cho chất lượng phát hiện; \textbf{free\_slots\_MAE} và \textbf{occupancy\_MAE\_pp} cho chất lượng đếm.
+
+\subsection{Kết quả trên validation}
+
+\begin{center}
+\begin{tabular}{|l|r|r|r|r|r|}
+\hline
+\textbf{Mô hình} & \textbf{mAP} & \textbf{AP có xe} & \textbf{AP trống} & \textbf{Sai số đếm} & \textbf{Thời gian} \\
+\hline
+Baseline A & 0.5176 & 0.3901 & 0.6451 & 7,17 & 0s \\
+Baseline B (Decision Tree) & 0.2769 & 0.2693 & 0.2845 & 38,76 & 565s \\
+Random Forest mặc định & 0.6042 & 0.6487 & 0.5597 & 8,00 & 598s \\
+RF + Optuna & 0.7787 & 0.8162 & 0.7413 & 3,31 & 332s \\
+RF + Optuna + mining & 0.7947 & 0.8423 & 0.7471 & 2,69 & 331s \\
+RF cắt vuông góc & 0.8305 & 0.8607 & 0.8003 & 8,41 & 379s \\
+\textbf{LightGBM} & \textbf{0.8723} & \textbf{0.8977} & \textbf{0.8468} & \textbf{2,21} & \textbf{190s} \\
+\hline
+\end{tabular}
+\end{center}
+
+LightGBM dẫn đầu ở cả hai tiêu chí, đồng thời huấn luyện nhanh nhất và cho bundle nhỏ nhất (3 MB so với 23 MB của Random Forest).
+
+\subsection{Phát hiện quan trọng: hằng số hậu xử lý mạnh hơn việc đổi mô hình}
+
+Hằng số \texttt{NMS\_IOU} ban đầu đặt 0.45 làm mAP tụt từ \textbf{0.6782 xuống 0.2743} --- hơn một nửa --- với \textit{cùng một mô hình}.
+
+Nguyên nhân: hai cửa sổ đồng tâm ở hai tỉ lệ liền nhau có IoU đúng bằng $(48/72)^2 = 0.4444$, nằm ngay \textit{dưới} ngưỡng 0.45, nên NMS không gộp được chúng và mỗi ô đỗ sinh ra nhiều khung trùng ở các tỉ lệ khác nhau. Lệch 0,01 là hành vi đảo ngược hoàn toàn.
+
+\begin{center}
+\begin{tabular}{|c|r|r|r|r|}
+\hline
+\textbf{NMS\_IOU} & \textbf{Số khung} & \textbf{Precision} & \textbf{Recall} & \textbf{mAP} \\
+\hline
+0.45 & 1.534 & 0,362 & 0,686 & 0.2743 \\
+\textbf{0.20} & \textbf{554} & \textbf{0,973} & 0,665 & \textbf{0.6782} \\
+\hline
+\end{tabular}
+\end{center}
+
+Recall gần như không đổi, tức 978 khung bị loại \textbf{đều là bản sao của cùng một ô}, không phải phát hiện đúng bị mất. Đây là thay đổi có ảnh hưởng lớn nhất trong toàn dự án, và nó không đến từ mô hình.
+
+\subsection{Kết quả trên tập test}
+
+Tập test được mở \textbf{đúng một lần}, ngày 06/09. Mô hình được \textbf{chọn trước khi nhìn kết quả} dựa trên validation --- LightGBM --- để con số không bị tinh chỉnh theo test. Năm mô hình còn lại vẫn được đo cùng lúc nhưng chỉ mang tính chẩn đoán.
+
+\begin{center}
+\begin{tabular}{|l|r|r|r|r|r|r|}
+\hline
+\textbf{Mô hình} & \textbf{mAP} & \textbf{mAP} & \textbf{Chênh} & \textbf{AP} & \textbf{AP} & \textbf{Sai số} \\
+ & \textbf{val} & \textbf{test} & & \textbf{có xe} & \textbf{trống} & \textbf{đếm} \\
+\hline
+\textbf{LightGBM} & 0.8723 & \textbf{0.6052} & $-0.2671$ & 0.8320 & 0.3783 & 31,93 \\
+RF + Optuna & 0.7787 & 0.5136 & $-0.2651$ & 0.7789 & 0.2484 & 37,78 \\
+RF + mining vòng 1 & 0.7868 & 0.4994 & $-0.2874$ & 0.7806 & 0.2181 & 39,35 \\
+RF + mining vòng 2 & 0.7947 & 0.4918 & $-0.3029$ & 0.7766 & 0.2070 & 40,22 \\
+RF mặc định & 0.6782 & 0.2680 & $-0.4102$ & 0.5283 & 0.0076 & 51,46 \\
+RF cắt vuông góc & 0.8305 & 0.1476 & $-0.6829$ & 0.2763 & 0.0189 & 46,31 \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Mô hình được chọn trước giữ vững vị trí số một.} mAP 0.6052 vượt cả ngưỡng ``Tốt'' 0.50 trên test, cao hơn hẳn mức 0.35 mà kế hoạch dự đoán. Nhưng \textbf{không mô hình nào đạt sai số đếm dưới 3 ô}.
+
+\subsection{Phân tích: lớp ``ô trống'' là chỗ vỡ}
+
+Với LightGBM trên test, hai lớp diễn biến hoàn toàn khác nhau:
+
+\begin{center}
+\begin{tabular}{|l|r|r|r|r|}
+\hline
+\textbf{Lớp} & \textbf{Precision} & \textbf{Recall} & \textbf{AP val} & \textbf{AP test} \\
+\hline
+có xe & 0,967 & 0,883 & 0.8977 & 0.8320 \\
+\textbf{ô trống} & 0,994 & \textbf{0,408} & 0.8468 & \textbf{0.3783} \\
+\hline
+\end{tabular}
+\end{center}
+
+Nhận diện xe gần như không suy giảm. Nhận diện ô trống thì sụp: recall 0,408 nghĩa là \textbf{bỏ sót gần 60\% số ô trống}, dù khi mô hình đã nói ``trống'' thì đúng tới 99,4\%.
+
+Con số này giải thích trọn vẹn sai số đếm: tập test có trung bình 51,9 ô trống mỗi ảnh; bỏ sót khoảng 60\% cho ra thiếu chừng 31 ô --- khớp gần như chính xác với \texttt{free\_slots\_MAE} $= 31{,}93$. \textbf{Mô hình không đếm sai lung tung, nó đếm thiếu một cách hệ thống.}
+
+\subsection{Phân tích: validation chỉ sai hướng ở hai trong ba quyết định}
+
+Đây là bài học phương pháp luận quan trọng nhất của dự án.
+
+\textbf{Hard negative mining --- tương quan âm gần như hoàn hảo:}
+
+\begin{center}
+\begin{tabular}{|c|r|r|}
+\hline
+\textbf{Vòng} & \textbf{mAP val} & \textbf{mAP test} \\
+\hline
+0 (chưa mining) & 0.7787 & 0.5136 \\
+1 & 0.7868 \quad($+0.0081$) & 0.4994 \quad($-0.0142$) \\
+2 & 0.7947 \quad($+0.0160$) & 0.4918 \quad($-0.0218$) \\
+\hline
+\end{tabular}
+\end{center}
+
+Validation cải thiện đơn điệu, test xấu đi đơn điệu. Nguyên nhân: mining dạy mô hình đoán ``nền'' nhiều hơn --- đúng khi lỗi chủ đạo là báo thừa (như trên UFPR04), nhưng phản tác dụng khi lỗi chủ đạo là bỏ sót (như trên PUCPR).
+
+\textbf{Cắt vuông góc:} đứng thứ hai trên validation nhưng \textbf{đứng cuối trên test}, sụp $-0.6829$. Recall lớp ô trống chỉ còn 0,019 --- tìm được chưa tới 2 ô trong 100.
+
+\textbf{Validation đoán đúng:} thứ hạng của LightGBM. Trong quá trình phân tích, nhóm từng nghi ngờ LightGBM dựa trên \textit{một} ảnh PUCPR đơn lẻ (trời mưa, 06:10 sáng, 99/100 ô trống) mà nó tỏ ra tệ nhất. Trên toàn bộ 210 ảnh thì ngược lại. \textbf{Một ảnh là ngoại lệ, không phải bằng chứng} --- đây cũng là một bài học.
+
+\subsection{Nhận xét định tính}
+
+Hệ thống hoạt động tốt với: ảnh ban ngày đủ sáng, ô đỗ nhìn rõ vạch kẻ, bãi đã có trong dữ liệu huấn luyện, và trường hợp đã biết trước sơ đồ ô (Nhánh B).
+
+Hệ thống yếu ở: bãi đỗ mới hoàn toàn, điều kiện mưa và ánh sáng yếu (tờ mờ sáng, chiều tối), ô đỗ ở xa camera nơi méo phối cảnh mạnh nhất, và chế độ Detector khi không có sơ đồ.
+
+\newpage
+\section{Phân tích lỗi và hạn chế}
+\label{sec:hanche}
+
+\subsection{H1 --- Không đếm được chỗ trống trên bãi mới}
+
+\textbf{Mức độ: chặn triển khai.} Mục tiêu sản phẩm là sai số dưới 3 ô. Trên bãi đã học đạt 2,21 ô; trên bãi mới là \textbf{31,93 ô} --- gấp hơn mười lần yêu cầu, và không mô hình nào trong sáu mô hình đạt được. Bảng điện tử báo còn 21 chỗ trong khi thực tế còn 52 là vô dụng, thậm chí gây hại vì tài xế sẽ tin nhầm.
+
+Nguyên nhân đã định lượng ở mục~\ref{sec:thucnghiem}: recall lớp ô trống tụt còn 0,408.
+
+\subsection{H2 --- Validation không dùng được để chọn hướng cải tiến}
+
+\textbf{Mức độ: nghiêm trọng.} Validation là UFPR04, cùng bãi với train. Hai trong ba hướng cải tiến được validation chấm điểm cao đã bị test bác bỏ (mining và cắt vuông góc). Mọi quyết định tinh chỉnh chỉ dựa trên validation đều có rủi ro đi ngược.
+
+Đây là hệ quả trực tiếp của việc thiết kế tập validation cùng bãi với train --- một đánh đổi có chủ ý để tinh chỉnh nhanh, nhưng cái giá lớn hơn dự kiến.
+
+\subsection{H3 --- Detector lệch giữa lúc huấn luyện và lúc chạy}
+
+\textbf{Mức độ: chưa giải quyết được.} Lúc huấn luyện, ô \textit{có xe} và \textit{ô trống} được cắt theo hình chữ nhật \textbf{xoay lấy từ nhãn}. Lúc trượt cửa sổ trên ảnh thật thì không có nhãn, mọi cửa sổ đều vuông góc.
+
+Đo trực tiếp trên 84 ô đỗ thật, cùng một mô hình, chỉ khác cách cắt:
+
+\begin{center}
+\begin{tabular}{|l|r|r|}
+\hline
+\textbf{Cách cắt ô} & \textbf{Đoán đúng} & \textbf{Bị gọi là ``nền''} \\
+\hline
+Xoay thẳng (như lúc huấn luyện) & \textbf{81,0\%} & --- \\
+Vuông góc (như lúc detector chạy) & \textbf{3,6\%} & \textbf{96,4\%} \\
+\hline
+\end{tabular}
+\end{center}
+
+Hạ ngưỡng không cứu được: ở mọi mức từ 0.20 đến 0.40 kết quả \textit{y hệt nhau}, vì mô hình gán cho cửa sổ vuông góc một xác suất thuộc lớp ``nền'' xấp xỉ bằng 1.
+
+Hướng chữa bằng cách huấn luyện lại trên ô cắt vuông góc \textbf{đã thử và thất bại} (xem H2). Nhánh B không dính lỗi này vì nó dùng đúng hình chữ nhật xoay từ sơ đồ.
+
+\subsection{H4 --- Tập test giờ đã ``bẩn''}
+
+\textbf{Mức độ: không đảo ngược được.} Tập test đã mở ngày 06/09 với sáu mô hình cùng lúc. Con số của LightGBM giữ nguyên giá trị vì được đăng ký trước khi đo, nhưng năm mô hình còn lại kể từ nay chỉ dùng để chẩn đoán. Mọi cải tiến sau thời điểm này không còn tập giữ độc lập để kiểm chứng --- muốn đo lại một cách sạch sẽ phải có bãi đỗ thứ tư.
+
+\subsection{H5 --- Bù lệch tỉ lệ nền: đúng lý thuyết, sai thực tế}
+
+\textbf{Mức độ: đã xử lý.} Chỉ 10\% cửa sổ nền được giữ khi trích đặc trưng, nên về lý thuyết phải bù lại phân phối tiên nghiệm lúc suy luận. Nhưng lỗi chủ đạo của detector là \textit{bỏ sót}, không phải báo thừa, nên bù prior làm nặng thêm: trên PUCPR nó bóp số khung từ 77 xuống còn \textbf{2}.
+
+Vì vậy tuỳ chọn này mặc định TẮT khi xử lý một ảnh, và BẬT khi tự dò sơ đồ qua nhiều ảnh (ở đó báo nhầm trên nền tĩnh lặp lại ở mọi khung hình nên bộ lọc theo tần suất không loại được, phải chặn ngay từ đầu).
+
+\subsection{H6 --- Mining bão hoà sau 2 vòng}
+
+\textbf{Mức độ: nhẹ.} Kế hoạch ghi lặp 3 vòng nhưng đo được vòng 3 thoái lui. Ngoài ra mỗi vòng chỉ đào được khoảng 2.200 mẫu trên tập huấn luyện 704.515 dòng --- thêm 0,3\%, quá nhỏ để tạo thay đổi lớn.
+
+\subsection{H7 --- Công việc tiếp tục sau mốc đóng băng mã nguồn}
+
+\textbf{Mức độ: quy trình.} Kế hoạch chốt đóng băng mã nguồn cuối Ngày 11 (02/09). Phần lớn kết quả trong báo cáo này --- Optuna, LightGBM, mining, mở test --- được tạo ra sau mốc đó. Nhóm ghi nhận đây là sai lệch so với quy trình đã cam kết.
+
+\subsection{Cải tiến có thể thực hiện nếu có thêm thời gian}
+
+\begin{enumerate}
+\item \textbf{Hiệu chỉnh ngưỡng theo từng bãi.} Recall lớp ô trống là 0,408 nhưng precision tới 0,994 --- mô hình \textit{quá dè dặt}, không phải thiếu năng lực. Hạ \texttt{score\_thr} riêng cho bãi mới có thể đổi rất nhiều recall lấy rất ít precision. Đây là cách rẻ nhất và nhắm đúng H1.
+\item \textbf{Dùng \texttt{auto\_layout} + Nhánh B cho bãi mới.} Nhánh B né được H3 và trên ảnh thử đạt sai số 2,0 ô. Dò sơ đồ một lần rồi phân loại từng ô mãi về sau.
+\item \textbf{Thí nghiệm domain shift theo thời tiết:} huấn luyện trên ngày nắng, kiểm trên ngày mưa, trong \textit{cùng} một bãi --- để tách ảnh hưởng của thời tiết khỏi ảnh hưởng của việc đổi bãi.
+\item \textbf{Chi phí lỗi bất đối xứng:} báo nhầm ``còn chỗ'' tệ hơn báo nhầm ``hết chỗ''. Hiện cả hai bị phạt như nhau.
+\item \textbf{Tăng đa dạng dữ liệu huấn luyện} bằng cách bổ sung bãi đỗ thứ tư, hoặc dùng kỹ thuật domain adaptation.
+\end{enumerate}
+
+\newpage
+\section{Kết luận và hướng phát triển}
+
+\subsection{Kết luận}
+
+Project giải quyết bài toán \textbf{đếm chỗ đỗ xe từ ảnh camera}, được phát biểu dưới dạng bài toán phát hiện đối tượng ba lớp trên ảnh tĩnh. Đầu vào là một ảnh bãi đỗ; đầu ra là khung bao kèm nhãn cho từng ô, tổng hợp thành số xe, số chỗ trống và tỉ lệ lấp đầy.
+
+Dữ liệu là bộ PKLot công khai, 12.417 ảnh từ ba bãi đỗ, được lấy mẫu thời gian còn 579 ảnh và chia \textbf{theo bãi đỗ} để tránh rò rỉ. Phương pháp là học máy cổ điển: trượt cửa sổ đa tỉ lệ, trích 395 đặc trưng thủ công, phân loại bằng LightGBM, hậu xử lý bằng ngưỡng và NMS.
+
+Hệ thống có ba chế độ chạy và một demo Streamlit hoàn chỉnh, nhận ảnh bất kỳ và xuất kết quả dạng CSV.
+
+\textbf{Về kết quả:} Trên bãi đã học, hệ thống đạt mAP 0.8723 và sai số đếm 2,21 ô --- vượt sàn Baseline A tới $+0.3547$ và đạt cả hai vế tiêu chí ``Tốt''. Trên bãi hoàn toàn mới, mAP đạt 0.6052 --- vẫn vượt ngưỡng ``Tốt'' 0.50 và cao hơn hẳn mức 0.35 kế hoạch dự đoán --- nhưng sai số đếm là 31,93 ô, chưa đạt yêu cầu.
+
+\textbf{Kết luận trung thực: hệ thống chạy tốt trên bãi đã học và chưa dùng được trên bãi mới.} Khả năng \textit{xếp hạng} còn giữ được sau khi đổi bãi, nhưng năng lực \textit{đếm} --- tức chính sản phẩm --- thì không.
+
+\subsection{Nhóm đã học được gì}
+
+\begin{itemize}
+\item \textbf{Bộ đo và cách chia dữ liệu quan trọng hơn mô hình.} Việc phát hiện camera xê dịch làm sàn Baseline A thay đổi gấp ba lần; nếu bỏ qua thì mọi so sánh sau đó đều vô nghĩa.
+\item \textbf{Hậu xử lý có thể mạnh hơn việc đổi mô hình.} Một hằng số NMS đặt sai làm mAP tụt hơn một nửa --- lớn hơn khoảng cách giữa Decision Tree và LightGBM.
+\item \textbf{Tập validation lạc quan sẽ dẫn sai đường.} Hai trong ba hướng cải tiến được validation ủng hộ đã bị test bác bỏ, một trong đó theo chiều đơn điệu ngược.
+\item \textbf{Chọn chỉ số đúng đơn vị.} Macro F1 ở mức cửa sổ nghe rất cao (0.9889) nhưng không phản ánh chất lượng sản phẩm; mAP ở mức khung bao mới là chỉ số đúng.
+\item \textbf{Một mẫu không phải bằng chứng.} Kết luận rút ra từ một ảnh đã bị 210 ảnh bác bỏ.
+\item \textbf{Mô hình phải được lưu kèm hợp đồng dữ liệu.} Thứ tự cột và bảng nhãn đều đã từng sai âm thầm; kiểm tra tự động lúc nạp là cách duy nhất phát hiện.
+\end{itemize}
+
+\subsection{Hướng phát triển}
+
+\begin{enumerate}
+\item \textbf{Ngắn hạn --- hiệu chỉnh ngưỡng theo bãi.} Nhắm trực tiếp vào H1, chi phí thấp nhất, không cần huấn luyện lại.
+\item \textbf{Ngắn hạn --- chuyển sang luồng \texttt{auto\_layout} + Nhánh B} cho mọi bãi triển khai thực tế, thay vì dùng Detector.
+\item \textbf{Trung hạn --- thu thập thêm dữ liệu} từ bãi đỗ thứ tư trở đi để có tập kiểm tra độc lập mới và tăng đa dạng huấn luyện.
+\item \textbf{Trung hạn --- domain adaptation:} dùng vài chục ảnh có nhãn của chính bãi triển khai để tinh chỉnh mô hình.
+\item \textbf{Dài hạn --- thử mạng nơ-ron} khi có GPU. Bài toán này có đủ dữ liệu để một mô hình phát hiện đối tượng hiện đại hoạt động tốt hơn, đặc biệt ở khả năng tổng quát hoá giữa các bãi.
+\item \textbf{Sản phẩm --- thêm cơ chế giải thích:} hiển thị độ tin cậy tổng thể và cảnh báo khi ảnh đầu vào khác xa dữ liệu huấn luyện, để người dùng biết khi nào không nên tin kết quả.
+\end{enumerate}
+
+Project này không chỉ là một thử nghiệm mô hình: nó có pipeline dữ liệu đầy đủ và chống rò rỉ, có bộ đo tự kiểm chứng, có nhật ký thí nghiệm tái lập được, có luồng suy luận cho ảnh thật, có demo tương tác, và có phân tích trung thực về giới hạn hiện tại của hệ thống.
+
+\newpage
+\section{Tài liệu tham khảo}
+\label{section:references}
+\nocite{*}
+\vspace{-3.2em}
+\printbibliography
+
+\newpage
+\begin{appendices}
+\begin{enumerate}
+\item \textbf{AIVIETNAM:} Thông tin về AIVIETNAM có thể đọc thêm tại \href{https://aivietnam.edu.vn/}{đây}.
+\item \textbf{GitHub Repository:} \url{https://github.com/AIVIETNAM-AIO-thanhnhan/car-parkinglot-count}
+\item \textbf{Demo Video:} \textit{(nhóm điền link video demo tại đây)}
+\item \textbf{Demo App / Website:} Chạy cục bộ bằng lệnh \texttt{streamlit run app/streamlit\_app.py}
+\item \textbf{Dataset:} PKLot --- \url{http://web.inf.ufpr.br/vri/databases/parking-lot-database} (CC BY 4.0)
+\item \textbf{Model Checkpoint:} \textit{(nhóm điền link Google Drive chứa file .joblib tại đây)}
+\item \textbf{Nhật ký thí nghiệm:} File \texttt{results.csv} trong repository ghi lại toàn bộ 24 lần chạy, mỗi dòng kèm đầy đủ siêu tham số và cấu hình hậu xử lý.
+\end{enumerate}
+\end{appendices}
+
+\end{document}
