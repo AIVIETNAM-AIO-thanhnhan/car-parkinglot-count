@@ -18,6 +18,12 @@ raw/
 *.jpeg
 *.png
 
+# Gói tải về từ Drive (pklot_project-*.zip, features-*.zip — ~7GB ở thư mục gốc)
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
 # NGOẠI LỆ: hình cho báo cáo thì giữ lại
 !report/figures/*.png
 
@@ -86,8 +92,27 @@ kaggle.json
 *.key
 credentials*.json
 
+# --- TÀI LIỆU NỘI BỘ (không commit) ---
+DEVELOPMENT.md
+
 # --- TẠM ---
 tmp/
 temp/
 scratch/
 *.log
+
+# --- FILE BUILD CỦA LATEX ---
+# Chỉ commit .tex và .bib; mọi thứ dưới đây do trình biên dịch sinh ra.
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+report/*.pdf

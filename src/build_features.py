@@ -14,6 +14,7 @@ import pandas as pd
 import cv2
 import xml.etree.ElementTree as ET
 
+import config
 import windows
 from features import extract_features, FEATURE_NAMES
 
@@ -61,12 +62,17 @@ def process_image(image_path, xml_path, image_id=None, window_size=None):
     win_size = choose_window_size(gt_boxes, window_size)
 
     wins = windows.generate_windows(H, W, win_size, STRIDE)
-    labs = windows.label_windows(wins, gt_boxes, gt_labels, IOU_POSITIVE, IOU_IGNORE)
+    labs = windows.label_window_ids(wins, gt_boxes, gt_labels, IOU_POSITIVE, IOU_IGNORE)
     wins, labs = windows.sample_windows(wins, labs, NEG_SAMPLE_RATE, RANDOM_SEED)
 
     feats = np.zeros((len(wins), 395), dtype=np.float32)
     for i, (x1, y1, x2, y2) in enumerate(wins):
-        feats[i] = extract_features(rgb[y1:y2, x1:x2])
+        # extract() cần đúng WINDOW_SIZE (HOG 6x6 cell). win_size ở đây suy ra từ ô thật nên
+        # thường KHÁC config.WINDOW_SIZE -> phải resize, nếu không số chiều HOG sẽ lệch.
+        crop = rgb[y1:y2, x1:x2]
+        if crop.shape[:2] != (config.WINDOW_SIZE, config.WINDOW_SIZE):
+            crop = cv2.resize(crop, (config.WINDOW_SIZE, config.WINDOW_SIZE), interpolation=cv2.INTER_AREA)
+        feats[i] = extract_features(crop)
 
     meta = pd.DataFrame({
         "image_id": image_id,

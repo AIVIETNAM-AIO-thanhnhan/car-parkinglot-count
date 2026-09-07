@@ -49,6 +49,9 @@ mahotas>=1.4
 # Lọc ảnh gần trùng — dự phòng nếu lấy mẫu theo thời gian chưa đủ
 imagehash>=4.3
 
+# UI demo (app/streamlit_app.py) — chạy: streamlit run app/streamlit_app.py
+streamlit>=1.50
+
 # =====================================================================
 # THIẾU TRÊN COLAB (copy dòng dưới vào ô đầu notebook)
 # !pip -q install pyarrow mahotas lightgbm optuna shap imagehash
